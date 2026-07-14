@@ -1273,55 +1273,294 @@ class PortfolioOptimizer:
         return self.efficient_frontier
 
 
-def create_portfolio_optimization_tab():
-    """Portfolio Optimization Dashboard"""
-    st.markdown("### 📋 Select Portfolio")
-    presets = {"Custom": [], "Magnificent 7": ["AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA"], "FAANG": ["META","AAPL","AMZN","NFLX","GOOGL"], "Indian IT": ["TCS.NS","INFY.NS","WIPRO.NS","HCLTECH.NS","TECHM.NS"], "Indian Banks": ["HDFCBANK.NS","ICICIBANK.NS","SBIN.NS","KOTAKBANK.NS","AXISBANK.NS"], "US Tech": ["AAPL","MSFT","NVDA","GOOGL","AMD"]}
-    col1, col2 = st.columns([1, 2])
-    with col1: preset = st.selectbox("Preset", list(presets.keys()))
-    with col2:
-        default_tickers = ",".join(presets[preset]) if preset != "Custom" else "AAPL, MSFT, NVDA, AMZN, GOOGL"
-        tickers_input = st.text_input("Tickers (comma-separated)", value=default_tickers)
-    col1, col2, col3 = st.columns(3)
-    with col1: risk_free = st.number_input("Risk-Free Rate (%)", value=6.0, min_value=0.0, max_value=20.0, step=0.5) / 100
-    with col2: period = st.selectbox("Period", ["1y","2y","3y","5y","10y"], index=3)
-    with col3: num_portfolios = st.select_slider("Frontier Points", [5000,10000,20000,30000,50000], value=20000)
+def def create_portfolio_optimization_tab():
+    """Portfolio Optimization Dashboard - Modern Portfolio Theory"""
+    st.markdown('<div class="section-header">🎯 Portfolio Optimization (Modern Portfolio Theory)</div>', unsafe_allow_html=True)
     
-    if st.button("🎯 Optimize Portfolio", type="primary", use_container_width=True):
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #1e293b, #0f172a); border: 1px solid rgba(102,126,234,0.3); padding: 1.2rem; border-radius: 12px; margin-bottom: 1.5rem; color: #e2e8f0;">
+        <p style="margin:0;">📊 <b>Modern Portfolio Theory</b> finds the optimal mix of stocks to maximize returns for a given level of risk. 
+        Enter your stock picks below and discover your optimal portfolio allocation.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Preset portfolios with descriptions
+    presets = {
+        "🔧 Custom": {"stocks": [], "desc": "Enter your own tickers"},
+        "🌟 Magnificent 7": {"stocks": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"], "desc": "Top US tech giants"},
+        "📱 FAANG": {"stocks": ["META", "AAPL", "AMZN", "NFLX", "GOOGL"], "desc": "Classic tech leaders"},
+        "🇮🇳 Indian IT": {"stocks": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"], "desc": "Top Indian IT companies"},
+        "🏦 Indian Banks": {"stocks": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"], "desc": "Leading Indian banks"},
+        "💻 US Tech": {"stocks": ["AAPL", "MSFT", "NVDA", "GOOGL", "AMD"], "desc": "US semiconductor & software"},
+        "🚗 EV Future": {"stocks": ["TSLA", "RIVN", "LCID", "NIO"], "desc": "Electric vehicle makers"},
+        "☁️ Cloud Computing": {"stocks": ["AMZN", "MSFT", "GOOGL", "CRM", "ADBE"], "desc": "Cloud & SaaS leaders"},
+        "🛡️ Defensive": {"stocks": ["WMT", "JNJ", "PG", "KO", "PEP"], "desc": "Low volatility consumer staples"},
+    }
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        preset_name = st.selectbox("📋 Preset Portfolio", list(presets.keys()))
+        preset = presets[preset_name]
+        st.caption(f"💡 {preset['desc']}")
+    
+    with col2:
+        if preset_name != "🔧 Custom":
+            default_tickers = ",".join(preset["stocks"])
+        else:
+            default_tickers = "AAPL, MSFT, NVDA, AMZN, GOOGL"
+        
+        tickers_input = st.text_input(
+            "🎯 Stock Tickers (comma-separated)", 
+            value=default_tickers,
+            placeholder="e.g., AAPL, MSFT, GOOGL",
+            help="Use .NS for NSE stocks (e.g., TCS.NS, RELIANCE.NS)"
+        )
+    
+    # Parameters in a nice card
+    st.markdown("### ⚙️ Optimization Parameters")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        risk_free = st.number_input(
+            "🏦 Risk-Free Rate (%)", 
+            value=6.0, min_value=0.0, max_value=20.0, step=0.5,
+            help="Government bond yield (6% for India, 4-5% for US)"
+        ) / 100
+    
+    with col2:
+        period = st.selectbox(
+            "📅 Historical Period", 
+            ["1y", "2y", "3y", "5y", "10y"], 
+            index=3,
+            help="More years = more reliable but may miss recent trends"
+        )
+    
+    with col3:
+        num_portfolios = st.select_slider(
+            "🔢 Simulation Points", 
+            options=[5000, 10000, 20000, 30000, 50000],
+            value=20000,
+            help="More points = smoother frontier but slower"
+        )
+    
+    with col4:
+        st.write("")
+        st.write("")
+        optimize_btn = st.button("🚀 Optimize Portfolio", type="primary", use_container_width=True)
+    
+    if optimize_btn:
         tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-        if len(tickers) < 2: st.error("Need at least 2 tickers."); return
-        opt = PortfolioOptimizer(tickers, period=period, risk_free_rate=risk_free)
-        with st.spinner("Downloading..."):
-            if not opt.download_data(): return
-        with st.spinner("Calculating..."): opt.calculate_returns()
-        with st.spinner("Optimizing..."):
-            max_sharpe = opt.optimize_sharpe(); min_vol = opt.optimize_min_volatility()
-        with st.spinner("Frontier..."): opt.generate_efficient_frontier(num_portfolios)
         
-        st.markdown("### 🏆 Optimal Portfolios")
-        col1, col2 = st.columns(2)
+        if len(tickers) < 2:
+            st.error("⚠️ Please enter at least 2 tickers for portfolio optimization.")
+            return
+        
+        if len(tickers) > 10:
+            st.warning("⚡ More than 10 stocks may take longer to optimize.")
+        
+        # Show what we're analyzing
+        st.info(f"🔍 Analyzing **{len(tickers)} stocks**: {', '.join(tickers)}")
+        
+        optimizer = PortfolioOptimizer(tickers, period=period, risk_free_rate=risk_free)
+        
+        # Progress steps
+        progress = st.progress(0)
+        status = st.empty()
+        
+        status.text("📥 Downloading price data...")
+        progress.progress(20)
+        if not optimizer.download_data():
+            st.error("❌ Failed to download data. Check ticker symbols.")
+            return
+        
+        status.text("📊 Calculating returns and covariance matrix...")
+        progress.progress(40)
+        optimizer.calculate_returns()
+        
+        status.text("🎯 Finding optimal portfolio weights...")
+        progress.progress(60)
+        max_sharpe = optimizer.optimize_sharpe()
+        min_vol = optimizer.optimize_min_volatility()
+        
+        status.text("📈 Generating efficient frontier...")
+        progress.progress(80)
+        optimizer.generate_efficient_frontier(num_portfolios)
+        
+        status.text("✅ Complete!")
+        progress.progress(100)
+        time.sleep(0.5)
+        progress.empty()
+        status.empty()
+        
+        # ===== RESULTS =====
+        st.markdown("---")
+        st.markdown("## 🏆 Optimal Portfolio Results")
+        
+        # Summary cards
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Max Sharpe Return", f"{max_sharpe['return']*100:.1f}%"); st.metric("Volatility", f"{max_sharpe['volatility']*100:.1f}%"); st.metric("Sharpe", f"{max_sharpe['sharpe']:.2f}")
-            fig = go.Figure(data=[go.Pie(labels=list(max_sharpe['weights'].keys()), values=list(max_sharpe['weights'].values()), hole=0.4)])
-            fig.update_layout(height=300, template='plotly_white'); st.plotly_chart(fig, use_container_width=True)
+            st.metric("📊 Assets", f"{len(tickers)}")
         with col2:
-            st.metric("Min Vol Return", f"{min_vol['return']*100:.1f}%"); st.metric("Volatility", f"{min_vol['volatility']*100:.1f}%"); st.metric("Sharpe", f"{min_vol['sharpe']:.2f}")
-            fig = go.Figure(data=[go.Pie(labels=list(min_vol['weights'].keys()), values=list(min_vol['weights'].values()), hole=0.4)])
-            fig.update_layout(height=300, template='plotly_white'); st.plotly_chart(fig, use_container_width=True)
+            st.metric("🎯 Max Sharpe", f"{max_sharpe['sharpe']:.2f}")
+        with col3:
+            st.metric("📈 Expected Return", f"{max_sharpe['return']*100:.1f}%")
+        with col4:
+            st.metric("📉 Risk (Vol)", f"{max_sharpe['volatility']*100:.1f}%")
         
+        # Two optimal portfolios side by side
+        st.markdown("### 🎯 Optimal Portfolio Allocations")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1e293b, #0f172a); border: 2px solid #10b981; padding: 1rem; border-radius: 12px;">
+                <h4 style="color:#10b981; margin:0 0 0.5rem 0;">🎯 Maximum Sharpe Ratio</h4>
+                <p style="color:#94a3b8; font-size:0.85rem; margin:0;">Best risk-adjusted returns</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.metric("Expected Return", f"{max_sharpe['return']*100:.1f}%")
+            st.metric("Volatility", f"{max_sharpe['volatility']*100:.1f}%")
+            st.metric("Sharpe Ratio", f"{max_sharpe['sharpe']:.2f}")
+            
+            # Pie chart
+            weights_data = {k: v for k, v in max_sharpe['weights'].items() if v > 0.01}
+            if weights_data:
+                fig = go.Figure(data=[go.Pie(
+                    labels=list(weights_data.keys()),
+                    values=list(weights_data.values()),
+                    hole=0.5,
+                    textinfo='label+percent',
+                    marker=dict(colors=['#10b981','#34d399','#6ee7b7','#a7f3d0','#d1fae5','#059669','#047857'][:len(weights_data)])
+                )])
+                fig.update_layout(height=350, template='plotly_white', margin=dict(t=0,b=0))
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1e293b, #0f172a); border: 2px solid #f59e0b; padding: 1rem; border-radius: 12px;">
+                <h4 style="color:#f59e0b; margin:0 0 0.5rem 0;">🛡️ Minimum Volatility</h4>
+                <p style="color:#94a3b8; font-size:0.85rem; margin:0;">Lowest risk portfolio</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.metric("Expected Return", f"{min_vol['return']*100:.1f}%")
+            st.metric("Volatility", f"{min_vol['volatility']*100:.1f}%")
+            st.metric("Sharpe Ratio", f"{min_vol['sharpe']:.2f}")
+            
+            weights_data = {k: v for k, v in min_vol['weights'].items() if v > 0.01}
+            if weights_data:
+                fig = go.Figure(data=[go.Pie(
+                    labels=list(weights_data.keys()),
+                    values=list(weights_data.values()),
+                    hole=0.5,
+                    textinfo='label+percent',
+                    marker=dict(colors=['#f59e0b','#fbbf24','#fcd34d','#fde68a','#fef3c7','#d97706','#b45309'][:len(weights_data)])
+                )])
+                fig.update_layout(height=350, template='plotly_white', margin=dict(t=0,b=0))
+                st.plotly_chart(fig, use_container_width=True)
+        
+        # Efficient Frontier
         st.markdown("### 📈 Efficient Frontier")
-        ef = opt.efficient_frontier
+        st.caption("Each dot = a different portfolio combination. The curve shows the best possible return for each risk level.")
+        
+        ef = optimizer.efficient_frontier
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=ef['volatilities']*100, y=ef['returns']*100, mode='markers', marker=dict(size=3, color=ef['sharpes'], colorscale='Viridis', showscale=True), name='Portfolios'))
-        fig.add_trace(go.Scatter(x=[max_sharpe['volatility']*100], y=[max_sharpe['return']*100], mode='markers', marker=dict(size=20, color='red', symbol='star'), name='Max Sharpe'))
-        fig.add_trace(go.Scatter(x=[min_vol['volatility']*100], y=[min_vol['return']*100], mode='markers', marker=dict(size=15, color='gold', symbol='diamond'), name='Min Vol'))
-        fig.update_layout(title=f'Efficient Frontier ({len(tickers)} Assets)', xaxis_title='Volatility (%)', yaxis_title='Return (%)', template='plotly_white', height=600)
+        
+        fig.add_trace(go.Scatter(
+            x=ef['volatilities'] * 100,
+            y=ef['returns'] * 100,
+            mode='markers',
+            marker=dict(
+                size=4,
+                color=ef['sharpes'],
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title='Sharpe Ratio')
+            ),
+            name=f'{num_portfolios:,} Portfolios',
+            text=[f"Sharpe: {s:.2f}<br>Return: {r*100:.1f}%<br>Risk: {v*100:.1f}%" 
+                  for s, r, v in zip(ef['sharpes'], ef['returns'], ef['volatilities'])],
+            hoverinfo='text'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[max_sharpe['volatility'] * 100],
+            y=[max_sharpe['return'] * 100],
+            mode='markers+text',
+            marker=dict(size=25, color='#10b981', symbol='star', line=dict(width=3, color='white')),
+            name='Max Sharpe',
+            text=['★ Max Sharpe'],
+            textposition='top center',
+            textfont=dict(size=14, color='#10b981', family='Arial Black')
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[min_vol['volatility'] * 100],
+            y=[min_vol['return'] * 100],
+            mode='markers+text',
+            marker=dict(size=20, color='#f59e0b', symbol='diamond', line=dict(width=3, color='white')),
+            name='Min Volatility',
+            text=['◆ Min Vol'],
+            textposition='top center',
+            textfont=dict(size=14, color='#f59e0b', family='Arial Black')
+        ))
+        
+        fig.update_layout(
+            title=f'Efficient Frontier • {len(tickers)} Assets • {num_portfolios:,} Portfolios',
+            xaxis_title='Annualized Volatility (%)',
+            yaxis_title='Expected Annual Return (%)',
+            template='plotly_white',
+            height=600,
+            hovermode='closest',
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        )
         st.plotly_chart(fig, use_container_width=True)
         
+        # Correlation Matrix
         st.markdown("### 🔥 Correlation Matrix")
-        corr = opt.daily_returns.corr()
-        fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, colorscale='RdBu', zmid=0, text=np.round(corr.values,2), texttemplate='%{text}', showscale=True))
-        fig.update_layout(height=400, template='plotly_white'); st.plotly_chart(fig, use_container_width=True)
+        st.caption("Shows how stocks move together. 🔵 Blue = move opposite (good diversification). 🔴 Red = move together (higher risk).")
+        
+        corr = optimizer.daily_returns.corr()
+        fig = go.Figure(data=go.Heatmap(
+            z=corr.values,
+            x=corr.columns,
+            y=corr.index,
+            colorscale='RdBu',
+            zmid=0,
+            zmin=-1, zmax=1,
+            text=np.round(corr.values, 2),
+            texttemplate='%{text}',
+            textfont={"size": 12},
+            showscale=True,
+            colorbar=dict(title='Correlation')
+        ))
+        fig.update_layout(height=450, template='plotly_white')
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Tips
+        with st.expander("💡 How to Use These Results", expanded=False):
+            st.markdown("""
+            ### 🎯 Max Sharpe Ratio Portfolio
+            - **Best for**: Long-term investors seeking optimal risk-adjusted returns
+            - **Use when**: You want the mathematically optimal portfolio
+            - **Rebalance**: Every 3-6 months to maintain weights
+            
+            ### 🛡️ Minimum Volatility Portfolio
+            - **Best for**: Conservative investors or near-retirement
+            - **Use when**: Capital preservation is priority
+            - **Expect**: Lower returns but less portfolio fluctuation
+            
+            ### 📈 Efficient Frontier
+            - Portfolios on the curve are "efficient" - you can't get more return without more risk
+            - Portfolios below the curve are suboptimal
+            - The "sweet spot" is usually near the Max Sharpe portfolio
+            
+            ### ⚠️ Important Notes
+            - Historical returns don't guarantee future results
+            - Past correlations can break during market crises
+            - Consider your personal risk tolerance and investment horizon
+            """)
 
 
 # ===== FORMATTING =====
