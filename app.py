@@ -1,6 +1,6 @@
 """
 Financial Statement Analyzer - Pro Version
-Yahoo Finance + Google Finance fallback
+Automatic fallback: Yahoo Finance → Google Finance
 Live prices, valuation ratios, peer comparison, and comprehensive financial analysis
 """
 
@@ -13,7 +13,6 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import time
 import requests
-import json
 import re
 
 # Page configuration
@@ -32,7 +31,7 @@ st.markdown("""
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         text-align: center; margin-bottom: 1rem;
     }
-    .sub-header { font-size: 1.2rem; color: #94a3b8; text-align: center; margin-bottom: 2rem; }
+    .sub-header { font-size: 1.1rem; color: #94a3b8; text-align: center; margin-bottom: 2rem; }
     .metric-card {
         background: linear-gradient(135deg, #667eea15, #764ba215);
         border: 1px solid rgba(102,126,234,0.2); padding: 1.2rem;
@@ -46,28 +45,21 @@ st.markdown("""
         background: linear-gradient(135deg, #f093fb15, #f5576c15);
         border: 1px solid rgba(240,147,251,0.2); padding: 1.2rem;
         border-radius: 15px; text-align: center; color: #e2e8f0; margin: 0.3rem 0;
-        transition: all 0.3s ease;
     }
-    .valuation-card:hover { transform: translateY(-3px); }
     .profitability-card {
         background: linear-gradient(135deg, #4facfe15, #00f2fe15);
         border: 1px solid rgba(79,172,254,0.2); padding: 1.2rem;
         border-radius: 15px; text-align: center; color: #e2e8f0; margin: 0.3rem 0;
-        transition: all 0.3s ease;
     }
-    .profitability-card:hover { transform: translateY(-3px); }
     .growth-card {
         background: linear-gradient(135deg, #43e97b15, #38f9d715);
         border: 1px solid rgba(67,233,123,0.2); padding: 1.2rem;
         border-radius: 15px; text-align: center; color: #e2e8f0; margin: 0.3rem 0;
-        transition: all 0.3s ease;
     }
-    .growth-card:hover { transform: translateY(-3px); }
     .live-price-box {
         background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
         border: 1px solid rgba(102,126,234,0.3); padding: 2rem;
         border-radius: 20px; color: white; text-align: center; margin: 1rem 0;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.3);
     }
     .price-up { color: #00ff88; font-size: 3rem; font-weight: 800; }
     .price-down { color: #ff4757; font-size: 3rem; font-weight: 800; }
@@ -102,6 +94,7 @@ CURRENCY_SYMBOLS = {
     'USD': '$', 'INR': '₹', 'EUR': '€', 'GBP': '£', 'JPY': '¥',
 }
 
+# Quick ticker resolution
 INDIAN_STOCKS_DB = {
     'RELIANCE': 'RELIANCE.NS', 'TCS': 'TCS.NS', 'HDFCBANK': 'HDFCBANK.NS',
     'INFY': 'INFY.NS', 'ICICIBANK': 'ICICIBANK.NS', 'ITC': 'ITC.NS',
@@ -114,6 +107,9 @@ INDIAN_STOCKS_DB = {
     'TITAN': 'TITAN.NS', 'NESTLEIND': 'NESTLEIND.NS', 'DRREDDY': 'DRREDDY.NS',
     'CIPLA': 'CIPLA.NS', 'HINDUNILVR': 'HINDUNILVR.NS', 'BRITANNIA': 'BRITANNIA.NS',
     'TECHM': 'TECHM.NS', 'JSWSTEEL': 'JSWSTEEL.NS',
+    'EICHERMOT': 'EICHERMOT.NS', 'HEROMOTOCO': 'HEROMOTOCO.NS',
+    'COALINDIA': 'COALINDIA.NS', 'DIVISLAB': 'DIVISLAB.NS',
+    'INDUSINDBK': 'INDUSINDBK.NS', 'BAJAJFINSV': 'BAJAJFINSV.NS',
 }
 
 PEER_GROUPS = {
@@ -127,161 +123,10 @@ PEER_GROUPS = {
 }
 
 
-class GoogleFinanceFetcher:
-    """Fetch stock data from Google Finance"""
-    
-    BASE_URL = "https://www.google.com/finance/quote/"
-    
-    @staticmethod
-    def get_google_ticker(ticker):
-        """Convert Yahoo ticker to Google Finance format"""
-        ticker_clean = ticker.replace('.NS', '').replace('.BO', '')
-        if ticker.endswith('.NS'):
-            return f"NSE:{ticker_clean}"
-        elif ticker.endswith('.BO'):
-            return f"BOM:{ticker_clean}"
-        return ticker_clean
-    
-    @staticmethod
-    def fetch_price_data(ticker):
-        """Fetch price and basic data from Google Finance"""
-        google_ticker = GoogleFinanceFetcher.get_google_ticker(ticker)
-        url = f"{GoogleFinanceFetcher.BASE_URL}{google_ticker}"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                return None
-            
-            # Extract data from Google Finance page
-            soup = BeautifulSoup(response.text, 'html.parser') if 'BeautifulSoup' in dir() else None
-            
-            # Try to find JSON data in the page
-            data = {}
-            
-            # Look for price in the page
-            price_pattern = r'data-last-price="([^"]*)"'
-            price_match = re.search(price_pattern, response.text)
-            if price_match:
-                data['currentPrice'] = float(price_match.group(1))
-            
-            # Look for previous close
-            prev_close_pattern = r'data-previous-close="([^"]*)"'
-            prev_match = re.search(prev_close_pattern, response.text)
-            if prev_match:
-                data['previousClose'] = float(prev_match.group(1))
-            
-            # Try extracting from meta tags or script tags
-            script_pattern = r'window\.__INITIAL_STATE__\s*=\s*({.*?});'
-            script_match = re.search(script_pattern, response.text, re.DOTALL)
-            if script_match:
-                try:
-                    import json
-                    state_data = json.loads(script_match.group(1))
-                    # Navigate through the state to find price data
-                    # This structure may change, so handle gracefully
-                except:
-                    pass
-            
-            if data:
-                data['source'] = 'Google Finance'
-                data['currency'] = 'INR' if ('.NS' in ticker or '.BO' in ticker) else 'USD'
-                return data
-            
-            return None
-            
-        except Exception as e:
-            return None
-    
-    @staticmethod
-    def fetch_company_info(ticker):
-        """Fetch company info from Google Finance"""
-        google_ticker = GoogleFinanceFetcher.get_google_ticker(ticker)
-        url = f"{GoogleFinanceFetcher.BASE_URL}{google_ticker}"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                return None
-            
-            info = {}
-            
-            # Extract market cap
-            mcap_pattern = r'Market cap\s*</div><div[^>]*>([^<]*)</div>'
-            mcap_match = re.search(mcap_pattern, response.text)
-            if mcap_match:
-                mcap_text = mcap_match.group(1).strip()
-                info['marketCap'] = GoogleFinanceFetcher._parse_number(mcap_text)
-            
-            # Extract P/E ratio
-            pe_pattern = r'P/E ratio\s*</div><div[^>]*>([^<]*)</div>'
-            pe_match = re.search(pe_pattern, response.text)
-            if pe_match:
-                try:
-                    info['trailingPE'] = float(pe_match.group(1).strip())
-                except:
-                    pass
-            
-            # Extract dividend yield
-            div_pattern = r'Dividend yield\s*</div><div[^>]*>([^<]*)</div>'
-            div_match = re.search(div_pattern, response.text)
-            if div_match:
-                try:
-                    div_text = div_match.group(1).strip().replace('%', '')
-                    info['dividendYield'] = float(div_text) / 100
-                except:
-                    pass
-            
-            # Extract 52-week range
-            range_pattern = r'52-week range\s*</div><div[^>]*>([^<]*)</div>'
-            range_match = re.search(range_pattern, response.text)
-            if range_match:
-                range_text = range_match.group(1).strip()
-                prices = re.findall(r'[\d,.]+', range_text)
-                if len(prices) >= 2:
-                    info['fiftyTwoWeekLow'] = float(prices[0].replace(',', ''))
-                    info['fiftyTwoWeekHigh'] = float(prices[1].replace(',', ''))
-            
-            return info if info else None
-            
-        except Exception as e:
-            return None
-    
-    @staticmethod
-    def _parse_number(text):
-        """Parse number with suffixes like B, Cr, T, M"""
-        text = text.replace(',', '').strip()
-        multipliers = {'T': 1e12, 'B': 1e9, 'Cr': 1e7, 'M': 1e6, 'K': 1e3, 'L': 1e5}
-        for suffix, mult in multipliers.items():
-            if suffix in text:
-                num = float(text.replace(suffix, '').strip())
-                return num * mult
-        try:
-            return float(text)
-        except:
-            return None
-
-
-# Import BeautifulSoup for Google Finance parsing
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    BeautifulSoup = None
-
-
 class ProFinancialAnalyzer:
-    def __init__(self, ticker, data_source="Yahoo Finance"):
+    def __init__(self, ticker, exchange="Auto-detect"):
         self.original_ticker = ticker.upper().strip()
-        self.ticker = self._resolve_ticker(ticker.upper().strip())
-        self.data_source = data_source
+        self.ticker = self._resolve_ticker(ticker.upper().strip(), exchange)
         self.stock = None
         self.financials = {}
         self.ratios = {}
@@ -289,136 +134,215 @@ class ProFinancialAnalyzer:
         self.currency = 'USD'
         self.currency_symbol = '$'
         self.company_name = ''
+        self.data_source = 'Yahoo Finance'
 
-    def _resolve_ticker(self, ticker):
-        if ticker in INDIAN_STOCKS_DB:
+    def _resolve_ticker(self, ticker, exchange):
+        """Resolve ticker with exchange suffix"""
+        if exchange == "NSE":
+            return ticker + '.NS' if not ticker.endswith('.NS') else ticker
+        elif exchange == "BSE":
+            return ticker + '.BO' if not ticker.endswith('.BO') else ticker
+        elif ticker in INDIAN_STOCKS_DB:
             return INDIAN_STOCKS_DB[ticker]
-        if ticker.endswith('.NS') or ticker.endswith('.BO'):
+        elif ticker.endswith('.NS') or ticker.endswith('.BO'):
             return ticker
         return ticker
 
     def get_live_price(self):
-        """Get live price from selected source"""
-        success = False
+        """Get live price with automatic fallback"""
+        # Try Yahoo Finance first
+        success = self._try_yahoo()
         
-        if self.data_source == "Yahoo Finance":
-            success = self._get_from_yahoo()
-            if not success:
-                st.warning("⚠️ Yahoo Finance failed. Trying Google Finance...")
-                success = self._get_from_google()
-                if success:
-                    self.data_source = "Google Finance (fallback)"
-        else:
-            success = self._get_from_google()
-            if not success:
-                st.warning("⚠️ Google Finance failed. Trying Yahoo Finance...")
-                success = self._get_from_yahoo()
-                if success:
-                    self.data_source = "Yahoo Finance (fallback)"
+        # Fallback to alternative Yahoo ticker
+        if not success:
+            success = self._try_alternate_yahoo()
+        
+        # Final fallback - try to get at least some data
+        if not success:
+            success = self._try_minimal_fetch()
         
         return success
 
-    def _get_from_yahoo(self):
+    def _try_yahoo(self):
+        """Try fetching from Yahoo Finance"""
         try:
             self.stock = yf.Ticker(self.ticker)
             info = self.stock.info
             
-            if not info or not info.get('marketCap'):
-                if self.ticker.endswith('.NS'):
-                    alt = self.ticker.replace('.NS', '.BO')
-                else:
-                    alt = self.ticker + '.NS'
-                try:
-                    alt_stock = yf.Ticker(alt)
-                    alt_info = alt_stock.info
-                    if alt_info and alt_info.get('marketCap'):
-                        self.stock = alt_stock
-                        self.ticker = alt
-                        info = alt_info
-                except:
-                    pass
-
-            self.live_price_data = {
-                'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
-                'previous_close': info.get('previousClose') or info.get('regularMarketPreviousClose'),
-                'open': info.get('open') or info.get('regularMarketOpen'),
-                'day_high': info.get('dayHigh') or info.get('regularMarketDayHigh'),
-                'day_low': info.get('dayLow') or info.get('regularMarketDayLow'),
-                'volume': info.get('volume') or info.get('regularMarketVolume'),
-                'market_cap': info.get('marketCap'),
-                'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
-                'fifty_two_week_low': info.get('fiftyTwoWeekLow'),
-                'beta': info.get('beta'),
-                'recommendation': info.get('recommendationKey'),
-                'number_of_analysts': info.get('numberOfAnalystOpinions'),
-            }
-            self.live_price_data = {k: v for k, v in self.live_price_data.items() if v is not None}
-            
-            if self.live_price_data.get('current_price'):
+            if info and info.get('marketCap'):
+                self._populate_from_info(info)
+                self.data_source = 'Yahoo Finance'
                 return True
             return False
         except:
             return False
 
-    def _get_from_google(self):
-        try:
-            # Try Google Finance
-            gf_data = GoogleFinanceFetcher.fetch_price_data(self.ticker)
-            gf_info = GoogleFinanceFetcher.fetch_company_info(self.ticker)
-            
-            if gf_data or gf_info:
-                merged = {}
-                if gf_info:
-                    merged.update(gf_info)
-                if gf_data:
-                    merged.update(gf_data)
-                
-                self.live_price_data = {
-                    'current_price': merged.get('currentPrice'),
-                    'previous_close': merged.get('previousClose'),
-                    'market_cap': merged.get('marketCap'),
-                    'fifty_two_week_high': merged.get('fiftyTwoWeekHigh'),
-                    'fifty_two_week_low': merged.get('fiftyTwoWeekLow'),
-                    'trailingPE': merged.get('trailingPE'),
-                    'dividendYield': merged.get('dividendYield'),
-                }
-                self.live_price_data = {k: v for k, v in self.live_price_data.items() if v is not None}
-                
-                if self.live_price_data.get('current_price'):
-                    # Also try Yahoo for the stock object (for financials)
-                    try:
-                        self.stock = yf.Ticker(self.ticker)
-                    except:
-                        pass
+    def _try_alternate_yahoo(self):
+        """Try alternate Yahoo ticker format"""
+        alternates = []
+        if self.ticker.endswith('.NS'):
+            alternates = [self.ticker.replace('.NS', '.BO'), self.ticker.replace('.NS', '')]
+        elif self.ticker.endswith('.BO'):
+            alternates = [self.ticker.replace('.BO', '.NS'), self.ticker.replace('.BO', '')]
+        else:
+            alternates = [self.ticker + '.NS', self.ticker + '.BO']
+        
+        for alt in alternates:
+            try:
+                alt_stock = yf.Ticker(alt)
+                alt_info = alt_stock.info
+                if alt_info and alt_info.get('marketCap'):
+                    self.stock = alt_stock
+                    self.ticker = alt
+                    self._populate_from_info(alt_info)
+                    self.data_source = 'Yahoo Finance'
                     return True
-            
-            return False
+            except:
+                continue
+        return False
+
+    def _try_minimal_fetch(self):
+        """Last resort - try to get any data possible"""
+        try:
+            info = self.stock.info if self.stock else {}
+            if info:
+                self._populate_from_info(info)
+                self.data_source = 'Yahoo Finance (limited)'
+                return True
         except:
-            return False
+            pass
+        
+        # Try Google Finance as absolute last resort
+        try:
+            gf_data = self._fetch_google_finance()
+            if gf_data:
+                self.live_price_data.update(gf_data)
+                self.data_source = 'Google Finance'
+                return True
+        except:
+            pass
+        
+        return False
+
+    def _fetch_google_finance(self):
+        """Fetch basic data from Google Finance"""
+        ticker_clean = self.ticker.replace('.NS', '').replace('.BO', '')
+        if self.ticker.endswith('.NS'):
+            gf_ticker = f'NSE:{ticker_clean}'
+        elif self.ticker.endswith('.BO'):
+            gf_ticker = f'BOM:{ticker_clean}'
+        else:
+            gf_ticker = ticker_clean
+        
+        url = f'https://www.google.com/finance/quote/{gf_ticker}'
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                return None
+            
+            data = {}
+            
+            # Try to find price in various patterns
+            patterns = [
+                r'"regularMarketPrice":\s*\[.*?(\d+\.?\d*)',
+                r'data-last-price="([^"]*)"',
+                r'"price":\s*(\d+\.?\d*)',
+                r'class="YMlKec fxKbKc"[^>]*>₹?([\d,.]+)',
+                r'class="fxKbKc"[^>]*>₹?([\d,.]+)',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, resp.text)
+                if match:
+                    try:
+                        data['current_price'] = float(match.group(1).replace(',', ''))
+                        break
+                    except:
+                        continue
+            
+            # Market cap
+            mcap_patterns = [
+                r'Market cap[^<]*</div><div[^>]*>([^<]+)',
+                r'"marketCap":\s*\[.*?(\d+\.?\d*)',
+            ]
+            for pattern in mcap_patterns:
+                match = re.search(pattern, resp.text)
+                if match:
+                    mcap_text = match.group(1)
+                    mcap = self._parse_google_number(mcap_text)
+                    if mcap:
+                        data['market_cap'] = mcap
+                        break
+            
+            if data:
+                return data
+            return None
+        except:
+            return None
+
+    def _parse_google_number(self, text):
+        """Parse number with suffixes"""
+        text = text.replace(',', '').strip()
+        mults = {'T': 1e12, 'B': 1e9, 'Cr': 1e7, 'M': 1e6, 'K': 1e3, 'L': 1e5}
+        for suffix, mult in mults.items():
+            if suffix in text:
+                try:
+                    return float(text.replace(suffix, '').strip()) * mult
+                except:
+                    pass
+        try:
+            return float(text)
+        except:
+            return None
+
+    def _populate_from_info(self, info):
+        """Populate live_price_data from info dict"""
+        self.live_price_data = {
+            'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
+            'previous_close': info.get('previousClose') or info.get('regularMarketPreviousClose'),
+            'open': info.get('open') or info.get('regularMarketOpen'),
+            'day_high': info.get('dayHigh') or info.get('regularMarketDayHigh'),
+            'day_low': info.get('dayLow') or info.get('regularMarketDayLow'),
+            'volume': info.get('volume') or info.get('regularMarketVolume'),
+            'market_cap': info.get('marketCap'),
+            'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
+            'fifty_two_week_low': info.get('fiftyTwoWeekLow'),
+            'beta': info.get('beta'),
+            'recommendation': info.get('recommendationKey'),
+            'number_of_analysts': info.get('numberOfAnalystOpinions'),
+        }
+        self.live_price_data = {k: v for k, v in self.live_price_data.items() if v is not None}
 
     def fetch_financial_data(self):
+        """Fetch financial statements"""
         try:
             if not self.stock:
                 self.stock = yf.Ticker(self.ticker)
-
+            
             info = self.stock.info
             self.financials['info'] = info
             self.company_name = info.get('longName', self.original_ticker)
             self.financials['sector'] = info.get('sector', 'N/A')
             self.financials['industry'] = info.get('industry', 'N/A')
-
+            
             self.financials['income'] = self.stock.financials
             self.financials['balance'] = self.stock.balance_sheet
             self.financials['cashflow'] = self.stock.cashflow
-
+            
             end = datetime.now()
             self.financials['prices'] = self.stock.history(start=end - timedelta(days=365*3), end=end)
-
+            
             self._detect_currency()
             return True
         except Exception as e:
-            st.error(f"Error: {str(e)}")
-            return False
+            self.financials['income'] = pd.DataFrame()
+            self.financials['balance'] = pd.DataFrame()
+            self.financials['cashflow'] = pd.DataFrame()
+            self.financials['prices'] = pd.DataFrame()
+            self._detect_currency()
+            return True
 
     def _detect_currency(self):
         info = self.financials.get('info', {})
@@ -517,22 +441,23 @@ class ProFinancialAnalyzer:
                 if prices is not None and not prices.empty and len(prices) >= 252:
                     self.ratios['52-Week Return'] = ((prices['Close'].iloc[-1]-prices['Close'].iloc[-252])/prices['Close'].iloc[-252])*100
 
-            # Fallback from info dict
+            # Always fallback to info dict for missing ratios
             for key, ratio_key, multiplier in [
                 ('returnOnEquity', 'ROE', 100), ('returnOnAssets', 'ROA', 100),
                 ('profitMargins', 'Net Profit Margin', 100), ('debtToEquity', 'Debt to Equity', 1),
                 ('trailingPE', 'P/E Ratio', 1), ('priceToBook', 'P/B Ratio', 1),
                 ('trailingEps', 'EPS', 1), ('revenueGrowth', 'Revenue Growth (YoY)', 100),
                 ('dividendYield', 'Dividend Yield', 100), ('currentRatio', 'Current Ratio', 1),
-                ('quickRatio', 'Quick Ratio', 1),
             ]:
                 if ratio_key not in self.ratios and info.get(key):
-                    self.ratios[ratio_key] = info[key] * multiplier
+                    try:
+                        self.ratios[ratio_key] = info[key] * multiplier
+                    except:
+                        pass
 
             return True
         except Exception as e:
-            st.error(f"Error: {str(e)}")
-            return False
+            return True
 
 
 # ===== FORMATTING =====
@@ -541,8 +466,8 @@ def format_financial_number(value, symbol, currency):
     if pd.isna(value) or value is None: return 'N/A'
     try:
         value = float(value)
-        abs_val = abs(value)
         sign = '-' if value < 0 else ''
+        abs_val = abs(value)
         if currency == 'INR':
             if abs_val >= 1e7: return f"{sign}{symbol}{abs_val/1e7:,.2f} Cr"
             elif abs_val >= 1e5: return f"{sign}{symbol}{abs_val/1e5:,.2f} L"
@@ -589,7 +514,6 @@ def get_peer_comparison(main_ticker, peer_tickers):
                 'Debt/Equity': round(info['debtToEquity'], 2) if info.get('debtToEquity') else None,
                 'Dividend Yield': round(info['dividendYield']*100, 2) if info.get('dividendYield') else None,
                 'Current Price': info.get('currentPrice') or info.get('regularMarketPrice'),
-                'Recommendation': info.get('recommendationKey', 'N/A'),
             })
         except: continue
     return pd.DataFrame(peer_data)
@@ -665,10 +589,8 @@ def create_peer_comparison_charts(peer_df, main_ticker_name, currency_symbol, cu
 def create_live_price_dashboard(analyzer):
     pd_data = analyzer.live_price_data
     cur = analyzer.currency_symbol
-    
     source_class = "source-yahoo" if "Yahoo" in analyzer.data_source else "source-google" if "Google" in analyzer.data_source else "source-fallback"
     
-    st.markdown("### 🟢 Live Market Data")
     cp = pd_data.get('current_price')
     pc = pd_data.get('previous_close')
 
@@ -680,24 +602,29 @@ def create_live_price_dashboard(analyzer):
         st.markdown(f'<div class="live-price-box"><h3>{analyzer.company_name}<span class="source-badge {source_class}">{analyzer.data_source}</span></h3><div class="{color}">{cur}{cp:.2f} {arrow}</div><div style="font-size:1.2rem;margin-top:0.5rem;">{cur}{abs(change):.2f} ({change_pct:+.2f}%)</div></div>', unsafe_allow_html=True)
     elif cp:
         st.markdown(f'<div class="live-price-box"><h3>{analyzer.company_name}<span class="source-badge {source_class}">{analyzer.data_source}</span></h3><div style="font-size:3rem;font-weight:800;">{cur}{cp:.2f}</div></div>', unsafe_allow_html=True)
+    else:
+        st.warning("Price data not available. Showing available metrics below.")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Open", f"{cur}{pd_data.get('open', 0):.2f}")
-    c2.metric("Day High", f"{cur}{pd_data.get('day_high', 0):.2f}")
-    c3.metric("Day Low", f"{cur}{pd_data.get('day_low', 0):.2f}")
-    c4.metric("Volume", f"{pd_data.get('volume', 0):,.0f}")
+    c1.metric("Open", f"{cur}{pd_data.get('open', 0):.2f}" if pd_data.get('open') else "N/A")
+    c2.metric("Day High", f"{cur}{pd_data.get('day_high', 0):.2f}" if pd_data.get('day_high') else "N/A")
+    c3.metric("Day Low", f"{cur}{pd_data.get('day_low', 0):.2f}" if pd_data.get('day_low') else "N/A")
+    c4.metric("Volume", f"{pd_data.get('volume', 0):,.0f}" if pd_data.get('volume') else "N/A")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("52W High", f"{cur}{pd_data.get('fifty_two_week_high', 0):.2f}")
-    c2.metric("52W Low", f"{cur}{pd_data.get('fifty_two_week_low', 0):.2f}")
+    c1.metric("52W High", f"{cur}{pd_data.get('fifty_two_week_high', 0):.2f}" if pd_data.get('fifty_two_week_high') else "N/A")
+    c2.metric("52W Low", f"{cur}{pd_data.get('fifty_two_week_low', 0):.2f}" if pd_data.get('fifty_two_week_low') else "N/A")
     c3.metric("Market Cap", analyzer._format_amount(pd_data.get('market_cap', 0)))
-    c4.metric("Beta", f"{pd_data.get('beta', 0):.2f}")
+    c4.metric("Beta", f"{pd_data.get('beta', 0):.2f}" if pd_data.get('beta') else "N/A")
 
 
 def create_ratio_dashboard(ratios, currency_symbol):
     st.markdown('<div class="section-header">📊 Financial Ratios</div>', unsafe_allow_html=True)
+    if not ratios:
+        st.warning("No ratios available."); return
+        
     categories = {
-        '📈 Valuation': {'P/E Ratio': 'P/E', 'P/B Ratio': 'P/B', 'P/S Ratio': 'P/S', 'P/FCF Ratio': 'P/FCF', 'PEG Ratio': 'PEG', 'Dividend Yield': 'Div Yield'},
+        '📈 Valuation': {'P/E Ratio': 'P/E', 'P/B Ratio': 'P/B', 'P/S Ratio': 'P/S', 'PEG Ratio': 'PEG', 'Dividend Yield': 'Div Yield'},
         '💰 Profitability': {'Net Profit Margin': 'Net Margin', 'Gross Profit Margin': 'Gross Margin', 'Operating Margin': 'Op Margin', 'ROE': 'ROE', 'ROA': 'ROA'},
         '📊 Growth': {'Revenue Growth (YoY)': 'Rev Growth', 'Net Income Growth (YoY)': 'Earn Growth', '52-Week Return': '52W Return', 'EPS': 'EPS'},
         '🏦 Health': {'Current Ratio': 'Curr Ratio', 'Quick Ratio': 'Quick Ratio', 'Debt to Equity': 'D/E', 'Asset Turnover': 'Asset Turn'},
@@ -721,10 +648,10 @@ def create_ratio_dashboard(ratios, currency_symbol):
 
 def create_advanced_charts(analyzer):
     financials = analyzer.financials
-    st.markdown('<div class="section-header">📉 Charts</div>', unsafe_allow_html=True)
-
     prices = financials.get('prices')
+    
     if prices is not None and not prices.empty:
+        st.markdown('<div class="section-header">📉 Charts</div>', unsafe_allow_html=True)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=prices.index, open=prices['Open'], high=prices['High'], low=prices['Low'], close=prices['Close'], name='Price'), row=1, col=1)
         for ma, color, name in [(20, '#ffa500', '20 MA'), (50, '#00b4d8', '50 MA'), (200, '#ff4757', '200 MA')]:
@@ -734,7 +661,6 @@ def create_advanced_charts(analyzer):
         fig.update_layout(height=600, template='plotly_white', xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    if prices is not None and not prices.empty:
         returns = prices['Close'].pct_change().dropna() * 100
         fig = go.Figure()
         fig.add_trace(go.Histogram(x=returns, nbinsx=50, marker_color='#667eea', opacity=0.7, histnorm='probability density'))
@@ -761,19 +687,16 @@ def detect_peer_group(ticker):
 
 def main():
     st.markdown('<h1 class="main-header">📊 FinAnalyzer Pro</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Yahoo Finance + Google Finance • Peer Comparison • 20+ Ratios</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Auto Fallback • Peer Comparison • 20+ Ratios • Live Prices</p>', unsafe_allow_html=True)
 
     with st.sidebar:
         st.header("🔍 Search")
-        ticker = st.text_input("Stock Ticker:", "AAPL", max_chars=50)
+        ticker = st.text_input("Stock Ticker:", "AAPL", max_chars=50, key="ticker_input")
         
-        # === DATA SOURCE SELECTOR ===
-        st.divider()
-        st.subheader("📡 Data Source")
-        data_source = st.radio(
-            "Choose data source:",
-            ["Yahoo Finance", "Google Finance"],
-            help="Google Finance works better for some Indian stocks. Yahoo Finance has richer financial data."
+        exchange = st.selectbox(
+            "Exchange:",
+            ["Auto-detect", "NSE India (.NS)", "BSE India (.BO)", "US Market"],
+            help="Select exchange for proper formatting"
         )
         
         st.divider()
@@ -785,37 +708,43 @@ def main():
         st.divider()
         t1, t2 = st.tabs(["India 🇮🇳", "US 🇺🇸"])
         with t1:
-            for tick in list(INDIAN_STOCKS_DB.keys())[:12]:
+            for tick in list(INDIAN_STOCKS_DB.keys())[:15]:
                 if st.button(tick, use_container_width=True, key=f"i_{tick}"):
-                    st.session_state['ticker'] = tick; st.session_state['source'] = data_source; st.rerun()
+                    st.session_state['ticker'] = tick
+                    st.session_state['exchange'] = "NSE India (.NS)"
+                    st.rerun()
         with t2:
             for s in ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "META", "NVDA", "JPM"]:
                 if st.button(s, use_container_width=True, key=f"u_{s}"):
-                    st.session_state['ticker'] = s; st.session_state['source'] = data_source; st.rerun()
+                    st.session_state['ticker'] = s
+                    st.session_state['exchange'] = "US Market"
+                    st.rerun()
 
+    # Restore from session state
     if 'ticker' in st.session_state:
         ticker = st.session_state['ticker']
-    if 'source' in st.session_state:
-        data_source = st.session_state['source']
+    if 'exchange' in st.session_state:
+        exchange = st.session_state['exchange']
 
     if not analyze_btn and 'ticker' not in st.session_state:
-        st.markdown('<div style="text-align:center;padding:3rem;"><h2>🚀 Welcome to FinAnalyzer Pro</h2><p>Choose <b>Yahoo Finance</b> or <b>Google Finance</b> in the sidebar.<br>Google Finance works better for some Indian stocks!</p><p>👈 Enter a ticker and click Analyze!</p></div>', unsafe_allow_html=True)
+        st.markdown('<div style="text-align:center;padding:3rem;"><h2>🚀 Welcome</h2><p>Enter a ticker and click Analyze!</p></div>', unsafe_allow_html=True)
         return
 
-    analyzer = ProFinancialAnalyzer(ticker, data_source=data_source)
+    # Map exchange
+    exchange_map = {"NSE India (.NS)": "NSE", "BSE India (.BO)": "BSE", "US Market": "US", "Auto-detect": "Auto"}
+    selected_exchange = exchange_map.get(exchange, "Auto")
+
+    analyzer = ProFinancialAnalyzer(ticker, exchange=selected_exchange)
 
     pb = st.progress(0)
     st_msg = st.empty()
 
-    st_msg.text(f"Fetching data from {data_source}..."); pb.progress(33)
+    st_msg.text("Fetching data..."); pb.progress(33)
     if not analyzer.get_live_price():
-        pb.empty(); st_msg.empty()
-        st.error(f"Unable to fetch data from {data_source}. Try switching data source.")
-        return
+        st.warning("⚠️ Limited data available. Showing what we found...")
 
     st_msg.text("Downloading financials..."); pb.progress(66)
-    if not analyzer.fetch_financial_data():
-        pb.empty(); st_msg.empty(); return
+    analyzer.fetch_financial_data()
 
     st_msg.text("Calculating ratios..."); pb.progress(100)
     analyzer.calculate_all_ratios()
@@ -824,12 +753,7 @@ def main():
 
     create_live_price_dashboard(analyzer)
 
-    if analyzer.live_price_data.get('recommendation'):
-        rec = analyzer.live_price_data.get('recommendation', '').upper()
-        rc = {'BUY': '#00ff88', 'STRONG_BUY': '#00ff88', 'HOLD': '#ffa500', 'SELL': '#ff4757', 'STRONG_SELL': '#ff4757'}.get(rec, '#666')
-        st.markdown(f'<div style="background-color:{rc};padding:1rem;border-radius:10px;color:white;text-align:center;"><h3>{rec.replace("_"," ")}</h3></div>', unsafe_allow_html=True)
-
-    st.markdown(f'<div class="info-box"><strong>{analyzer.company_name}</strong> | {analyzer.financials.get("sector","N/A")} | {analyzer.currency} ({analyzer.currency_symbol})</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box"><strong>{analyzer.company_name}</strong> | {analyzer.financials.get("sector","N/A")} | {analyzer.currency} ({analyzer.currency_symbol}) | <span class="source-badge source-{"yahoo" if "Yahoo" in analyzer.data_source else "google" if "Google" in analyzer.data_source else "fallback"}">{analyzer.data_source}</span></div>', unsafe_allow_html=True)
 
     create_ratio_dashboard(analyzer.ratios, analyzer.currency_symbol)
     create_advanced_charts(analyzer)
@@ -840,7 +764,7 @@ def main():
         else:
             group_name, peer_list = detect_peer_group(analyzer.ticker)
             if group_name: st.info(f"🔍 Peer group: **{group_name.replace('_',' ')}**")
-            else: st.info("No auto peer group. Add custom peers.")
+            else: st.info("Add custom peers in sidebar for comparison.")
 
         if peer_list:
             peer_list = [p for p in peer_list if p != analyzer.ticker]
@@ -852,7 +776,7 @@ def main():
                         create_peer_comparison_charts(peer_df, analyzer.ticker, analyzer.currency_symbol, analyzer.currency)
 
     st.markdown('<div class="section-header">📋 Financial Statements</div>', unsafe_allow_html=True)
-    st.caption(f"Currency: {analyzer.currency} ({analyzer.currency_symbol}) | Source: {analyzer.data_source}")
+    st.caption(f"Currency: {analyzer.currency} ({analyzer.currency_symbol})")
 
     tab1, tab2, tab3 = st.tabs(["📊 Income Statement", "💰 Balance Sheet", "💵 Cash Flow"])
 
@@ -867,7 +791,7 @@ def main():
                     st.dataframe(df, use_container_width=True)
                     st.download_button(f"Download {name}", df.to_csv(), f"{analyzer.original_ticker}_{key}.csv", "text/csv")
             else:
-                st.warning(f"{name} Statement not available. Some ratios shown from available market data.")
+                st.info(f"{name} Statement: Not available. Ratios calculated from available market data.")
 
     st.divider()
     st.caption(f"Data: {analyzer.data_source} | {analyzer.currency} | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
