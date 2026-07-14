@@ -2466,123 +2466,364 @@ def create_factor_investing_dashboard(analyzer):
 
 
 def create_advanced_portfolio_tab():
-    """Advanced Portfolio Construction Methods"""
+    """Advanced Portfolio Construction - Institutional Grade"""
     st.markdown('<div class="section-header">🏦 Advanced Portfolio Construction</div>', unsafe_allow_html=True)
     
-    st.markdown("### Select Portfolio & Method")
+    # Instructions card
+    with st.expander("📖 How to Use - READ FIRST", expanded=False):
+        st.markdown("""
+        ### 🏦 Portfolio Construction Methods
+        
+        | Method | Best For | How It Works |
+        |--------|----------|--------------|
+        | **Black-Litterman** | Investors with market views | Combines market equilibrium with your predictions. If you believe AAPL will return 15%, it adjusts weights accordingly. |
+        | **Risk Parity** | Risk-focused investors | Each asset contributes equally to portfolio risk. Safer assets get higher weights. Used by Bridgewater. |
+        | **Maximum Sharpe** | Return-focused investors | Classic Markowitz optimization. Finds the highest return per unit of risk. |
+        
+        ### 📋 Preset Portfolios
+        - **Magnificent 7**: Apple, Microsoft, NVIDIA, Amazon, Google, Meta, Tesla
+        - **Indian IT**: TCS, Infosys, Wipro, HCL Tech, Tech Mahindra
+        - **Indian Banks**: HDFC Bank, ICICI Bank, SBI, Kotak, Axis Bank
+        
+        ### ⚙️ Parameters
+        - **Views**: Your market predictions (e.g., "AAPL will return 15%")
+        - **Confidence**: How sure you are (0-100%). Higher = more weight on your view
+        """)
+    
+    st.markdown("---")
+    
+    # ===== STEP 1: SELECT PORTFOLIO =====
+    st.markdown("### 📋 Step 1: Select Your Portfolio")
     
     presets = {
-        "Custom": [],
-        "Magnificent 7": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"],
-        "Indian IT": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"],
-        "Indian Banks": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
+        "🔧 Custom Portfolio": [],
+        "🌟 Magnificent 7": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"],
+        "📱 FAANG": ["META", "AAPL", "AMZN", "NFLX", "GOOGL"],
+        "🇮🇳 Indian IT Giants": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"],
+        "🏦 Indian Banking": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
+        "💻 US Tech": ["AAPL", "MSFT", "NVDA", "GOOGL", "AMD", "CRM", "ADBE"],
+        "🛡️ Defensive Mix": ["WMT", "JNJ", "PG", "KO", "PEP", "MCD"],
+        "🚀 High Growth": ["TSLA", "NVDA", "AMD", "META", "NFLX"],
     }
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        preset = st.selectbox("Preset", list(presets.keys()), key="adv_port_preset")
+        preset = st.selectbox("Preset Portfolio", list(presets.keys()), key="adv_preset",
+                              help="Choose a preset or select 'Custom' to enter your own tickers")
     with col2:
-        default_tickers = ",".join(presets[preset]) if preset != "Custom" else "AAPL, MSFT, NVDA, AMZN, GOOGL"
-        tickers_input = st.text_input("Tickers", value=default_tickers, key="adv_port_tickers")
+        if preset != "🔧 Custom Portfolio":
+            default_tickers = ",".join(presets[preset])
+        else:
+            default_tickers = "AAPL, MSFT, NVDA, AMZN, GOOGL"
+        
+        tickers_input = st.text_input(
+            "Stock Tickers (comma-separated)", 
+            value=default_tickers, 
+            key="adv_tickers",
+            placeholder="e.g., AAPL, MSFT, GOOGL, RELIANCE.NS",
+            help="Use .NS for NSE stocks (e.g., TCS.NS), .BO for BSE"
+        )
     
-    # Method selection
-    method = st.radio("Portfolio Construction Method:", 
-                      ["Black-Litterman", "Risk Parity", "Maximum Sharpe (Markowitz)"],
-                      horizontal=True)
+    # ===== STEP 2: CHOOSE METHOD =====
+    st.markdown("### 🎯 Step 2: Choose Construction Method")
     
-    if st.button("🚀 Construct Portfolio", type="primary", use_container_width=True):
+    method = st.radio(
+        "Portfolio Construction Method:",
+        ["🎯 Maximum Sharpe (Markowitz)", "⚖️ Risk Parity (Equal Risk)", "🧠 Black-Litterman (With Views)", "📊 Compare All Three"],
+        horizontal=True,
+        help="Select the portfolio optimization method"
+    )
+    
+    # ===== STEP 3: CONFIGURE PARAMETERS =====
+    st.markdown("### ⚙️ Step 3: Configure Parameters")
+    
+    if "Black-Litterman" in method:
+        st.info("💡 **Black-Litterman** lets you add your own market views. The model starts with market equilibrium and adjusts based on your predictions.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**📈 Your Market Views**")
+            view_ticker = st.text_input("Ticker you have a view on:", value="AAPL", key="bl_view_ticker",
+                                        help="Which stock do you have a prediction for?")
+            view_return = st.slider("Expected Return (%)", -20.0, 50.0, 15.0, 0.5, key="bl_view_return",
+                                    help="What annual return do you expect?") / 100
+        
+        with col2:
+            st.markdown("**🎯 Confidence Level**")
+            view_confidence = st.slider("Confidence in your view", 10, 100, 60, 5, key="bl_confidence",
+                                        help="How confident are you? 100% = completely sure, 10% = just a guess") / 100
+            st.caption(f"Confidence: {view_confidence*100:.0f}% — {'High conviction' if view_confidence > 0.7 else 'Moderate' if view_confidence > 0.4 else 'Low conviction'}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        risk_free = st.number_input("Risk-Free Rate (%)", value=6.0, min_value=0.0, max_value=15.0, step=0.5, key="adv_rf",
+                                    help="Government bond yield") / 100
+    with col2:
+        period = st.selectbox("Historical Data Period", ["6mo", "1y", "2y", "3y", "5y"], index=1, key="adv_period",
+                              help="Longer periods give more stable estimates")
+    
+    # ===== RUN BUTTON =====
+    st.markdown("### 🚀 Step 4: Construct Portfolio")
+    
+    run_col1, run_col2, run_col3 = st.columns([1, 2, 1])
+    with run_col2:
+        run_btn = st.button("🚀 Construct Portfolio", type="primary", use_container_width=True, key="adv_run")
+    
+    if run_btn:
         tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
         
         if len(tickers) < 2:
-            st.error("Need at least 2 tickers.")
+            st.error("⚠️ Please enter at least 2 tickers for portfolio construction.")
             return
         
-        # Fetch data
-        with st.spinner("Fetching data..."):
-            market_caps = {}
-            prices_data = {}
-            
-            for t in tickers:
-                try:
-                    stock = yf.Ticker(t)
-                    info = stock.info
-                    market_caps[t] = info.get('marketCap', 1e9) or 1e9
-                    hist = stock.history(period="1y")
-                    if not hist.empty:
-                        prices_data[t] = hist['Close']
-                except:
-                    market_caps[t] = 1e9
-            
-            prices_df = pd.DataFrame(prices_data).dropna()
-            returns = prices_df.pct_change().dropna()
-            cov_matrix = returns.cov() * 252
+        if len(tickers) > 15:
+            st.warning("⚡ More than 15 stocks may take longer to process.")
         
-        # Run selected method
-        if method == "Black-Litterman":
-            # Default views based on recent performance
-            returns_annual = returns.mean() * 252
-            top_performer = returns_annual.idxmax()
-            
+        st.info(f"🔍 Analyzing **{len(tickers)} stocks**: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''}")
+        
+        # Fetch data
+        progress = st.progress(0)
+        status = st.empty()
+        
+        status.text("📥 Downloading price data...")
+        progress.progress(25)
+        
+        market_caps = {}
+        prices_data = {}
+        failed = []
+        
+        for t in tickers:
+            try:
+                stock = yf.Ticker(t)
+                info = stock.info
+                market_caps[t] = info.get('marketCap', 1e9) or 1e9
+                hist = stock.history(period=period)
+                if not hist.empty and len(hist) > 20:
+                    prices_data[t] = hist['Close']
+                else:
+                    failed.append(t)
+            except:
+                failed.append(t)
+        
+        if failed:
+            st.warning(f"⚠️ Could not fetch data for: {', '.join(failed)}")
+            for f in failed:
+                if f in tickers:
+                    tickers.remove(f)
+        
+        if len(tickers) < 2:
+            st.error("Need at least 2 valid tickers after removing failed ones.")
+            return
+        
+        status.text("📊 Calculating returns and covariance...")
+        progress.progress(50)
+        
+        prices_df = pd.DataFrame(prices_data).dropna()
+        returns = prices_df.pct_change().dropna()
+        cov_matrix = returns.cov() * 252
+        
+        status.text("🎯 Running optimization...")
+        progress.progress(75)
+        
+        results_displayed = False
+        
+        # ===== BLACK-LITTERMAN =====
+        if method == "🧠 Black-Litterman (With Views)":
             bl = BlackLitterman.calculate(
-                market_caps, cov_matrix,
-                views=[{'tickers': [top_performer], 'return': returns_annual[top_performer]}],
-                view_confidences=[0.6]
+                {t: market_caps.get(t, 1e9) for t in tickers}, 
+                cov_matrix,
+                views=[{'tickers': [view_ticker.upper()], 'return': view_return}],
+                view_confidences=[view_confidence]
             )
             
-            st.success(f"✅ Portfolio constructed using **{bl['method']}**")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**🎯 Optimal Weights**")
-                fig = go.Figure(data=[go.Pie(labels=list(bl['weights'].keys()), 
-                                             values=list(bl['weights'].values()), hole=0.4)])
-                fig.update_layout(height=350, template='plotly_white')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("**📈 Expected Returns**")
-                er = bl['expected_returns']
-                returns_df = pd.DataFrame({'Ticker': list(er.keys()), 'Expected Return': [f"{v*100:.1f}%" for v in er.values()]})
-                st.dataframe(returns_df, use_container_width=True, hide_index=True)
+            if bl:
+                st.success(f"✅ **{bl['method']}** constructed successfully!")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("### 🎯 Black-Litterman Weights")
+                    st.caption("Optimal allocation combining market equilibrium with your views")
+                    
+                    weights_df = pd.DataFrame({
+                        'Ticker': list(bl['weights'].keys()),
+                        'Weight': [f"{w*100:.1f}%" for w in bl['weights'].values()]
+                    }).sort_values('Weight', ascending=False)
+                    st.dataframe(weights_df, use_container_width=True, hide_index=True)
+                    
+                    fig = go.Figure(data=[go.Pie(
+                        labels=list(bl['weights'].keys()),
+                        values=list(bl['weights'].values()),
+                        hole=0.5,
+                        textinfo='label+percent'
+                    )])
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.markdown("### 📈 Expected Returns")
+                    st.caption("Market equilibrium vs your view-adjusted returns")
+                    
+                    er = bl['expected_returns']
+                    eq = bl.get('equilibrium_returns', er)
+                    
+                    returns_comparison = pd.DataFrame({
+                        'Ticker': list(er.keys()),
+                        'Equilibrium': [f"{eq.get(t, 0)*100:.1f}%" for t in er.keys()],
+                        'With Your View': [f"{er[t]*100:.1f}%" for t in er.keys()]
+                    })
+                    st.dataframe(returns_comparison, use_container_width=True, hide_index=True)
+                    
+                    # Bar chart comparing returns
+                    fig = go.Figure()
+                    tickers_list = list(er.keys())[:8]
+                    fig.add_trace(go.Bar(name='Equilibrium', x=tickers_list, 
+                                        y=[eq.get(t, 0)*100 for t in tickers_list], marker_color='#94a3b8'))
+                    fig.add_trace(go.Bar(name='With Your View', x=tickers_list, 
+                                        y=[er[t]*100 for t in tickers_list], marker_color='#667eea'))
+                    fig.update_layout(title='Return Comparison', template='plotly_white', height=350, barmode='group')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                results_displayed = True
         
-        elif method == "Risk Parity":
+        # ===== RISK PARITY =====
+        elif method == "⚖️ Risk Parity (Equal Risk)":
             rp = RiskParity.calculate(cov_matrix)
             
-            st.success(f"✅ Risk Parity converged in **{rp['iterations']} iterations**")
-            st.metric("Portfolio Volatility", f"{rp['port_volatility']*100:.1f}%")
+            st.success(f"✅ **Risk Parity** converged in {rp['iterations']} iterations")
+            st.metric("Portfolio Volatility (Annualized)", f"{rp['port_volatility']*100:.1f}%")
             
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**🎯 Risk Parity Weights**")
-                fig = go.Figure(data=[go.Pie(labels=list(rp['weights'].keys()), 
-                                             values=list(rp['weights'].values()), hole=0.4)])
-                fig.update_layout(height=350, template='plotly_white')
+                st.markdown("### ⚖️ Risk Parity Weights")
+                st.caption("Each asset contributes equally to total portfolio risk")
+                
+                fig = go.Figure(data=[go.Pie(
+                    labels=list(rp['weights'].keys()),
+                    values=list(rp['weights'].values()),
+                    hole=0.5,
+                    textinfo='label+percent'
+                )])
+                fig.update_layout(height=400, template='plotly_white')
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                st.markdown("**⚖️ Risk Contributions**")
+                st.markdown("### 🎯 Risk Contributions")
+                st.caption("Target: Equal risk from each asset")
+                
                 rc = rp['risk_contributions']
-                rc_df = pd.DataFrame({'Ticker': list(rc.keys()), 'Risk Contribution %': [f"{v:.1f}%" for v in rc.values()]})
+                rc_df = pd.DataFrame({
+                    'Ticker': list(rc.keys()),
+                    'Risk Contribution': [f"{v:.1f}%" for v in rc.values()]
+                }).sort_values('Risk Contribution', ascending=False)
                 st.dataframe(rc_df, use_container_width=True, hide_index=True)
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=list(rc.keys()), y=list(rc.values()), marker_color='#667eea',
+                                    text=[f"{v:.1f}%" for v in rc.values()], textposition='outside'))
+                fig.add_hline(y=100/len(tickers), line_dash="dash", line_color="#10b981",
+                             annotation_text=f"Target: {100/len(tickers):.1f}%")
+                fig.update_layout(title='Risk Contribution per Asset', template='plotly_white', height=350)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            results_displayed = True
         
-        elif method == "Maximum Sharpe (Markowitz)":
-            opt = PortfolioOptimizer(tickers)
-            opt.prices = prices_df
-            opt.daily_returns = returns
-            opt.mean_returns = returns.mean() * 252
-            opt.cov_matrix = cov_matrix
+        # ===== MAXIMUM SHARPE =====
+        elif method == "🎯 Maximum Sharpe (Markowitz)":
+            opt = PortfolioOptimizer(tickers, period=period, risk_free_rate=risk_free)
+            if opt.download_data() and opt.calculate_returns():
+                max_sharpe = opt.optimize_sharpe()
+                min_vol = opt.optimize_min_volatility()
+                
+                st.success(f"✅ **Maximum Sharpe Portfolio** optimized!")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("### 🎯 Max Sharpe Weights")
+                    st.metric("Expected Return", f"{max_sharpe['return']*100:.1f}%")
+                    st.metric("Sharpe Ratio", f"{max_sharpe['sharpe']:.2f}")
+                    
+                    fig = go.Figure(data=[go.Pie(
+                        labels=list(max_sharpe['weights'].keys()),
+                        values=list(max_sharpe['weights'].values()),
+                        hole=0.5, textinfo='label+percent'
+                    )])
+                    fig.update_layout(height=350, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.markdown("### 🛡️ Min Volatility Weights")
+                    st.metric("Expected Return", f"{min_vol['return']*100:.1f}%")
+                    st.metric("Sharpe Ratio", f"{min_vol['sharpe']:.2f}")
+                    
+                    fig = go.Figure(data=[go.Pie(
+                        labels=list(min_vol['weights'].keys()),
+                        values=list(min_vol['weights'].values()),
+                        hole=0.5, textinfo='label+percent'
+                    )])
+                    fig.update_layout(height=350, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                results_displayed = True
+        
+        # ===== COMPARE ALL =====
+        elif method == "📊 Compare All Three":
+            st.markdown("### 📊 Comparing All Three Methods")
             
-            max_sharpe = opt.optimize_sharpe()
-            st.success("✅ Maximum Sharpe Ratio Portfolio")
+            # Run all methods
+            col1, col2, col3 = st.columns(3)
             
-            st.markdown("**🎯 Optimal Weights**")
-            fig = go.Figure(data=[go.Pie(labels=list(max_sharpe['weights'].keys()), 
-                                         values=list(max_sharpe['weights'].values()), hole=0.4)])
-            fig.update_layout(height=350, template='plotly_white')
-            st.plotly_chart(fig, use_container_width=True)
+            with col1:
+                st.markdown("**🎯 Max Sharpe**")
+                try:
+                    opt = PortfolioOptimizer(tickers, period=period, risk_free_rate=risk_free)
+                    if opt.download_data() and opt.calculate_returns():
+                        ms = opt.optimize_sharpe()
+                        st.metric("Sharpe", f"{ms['sharpe']:.2f}")
+                        st.metric("Return", f"{ms['return']*100:.1f}%")
+                        fig = go.Figure(data=[go.Pie(labels=list(ms['weights'].keys()), values=list(ms['weights'].values()), hole=0.4)])
+                        fig.update_layout(height=250, template='plotly_white', margin=dict(t=0,b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+                except:
+                    st.warning("Could not compute")
             
-            st.metric("Expected Return", f"{max_sharpe['return']*100:.1f}%")
-            st.metric("Sharpe Ratio", f"{max_sharpe['sharpe']:.2f}")
+            with col2:
+                st.markdown("**⚖️ Risk Parity**")
+                try:
+                    rp = RiskParity.calculate(cov_matrix)
+                    st.metric("Volatility", f"{rp['port_volatility']*100:.1f}%")
+                    st.metric("Iterations", f"{rp['iterations']}")
+                    fig = go.Figure(data=[go.Pie(labels=list(rp['weights'].keys()), values=list(rp['weights'].values()), hole=0.4)])
+                    fig.update_layout(height=250, template='plotly_white', margin=dict(t=0,b=0))
+                    st.plotly_chart(fig, use_container_width=True)
+                except:
+                    st.warning("Could not compute")
+            
+            with col3:
+                st.markdown("**🧠 Black-Litterman**")
+                try:
+                    returns_annual = returns.mean() * 252
+                    top = returns_annual.idxmax()
+                    bl = BlackLitterman.calculate(
+                        {t: market_caps.get(t, 1e9) for t in tickers}, cov_matrix,
+                        views=[{'tickers': [top], 'return': returns_annual[top]}],
+                        view_confidences=[0.5]
+                    )
+                    if bl:
+                        fig = go.Figure(data=[go.Pie(labels=list(bl['weights'].keys()), values=list(bl['weights'].values()), hole=0.4)])
+                        fig.update_layout(height=250, template='plotly_white', margin=dict(t=0,b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+                except:
+                    st.warning("Could not compute")
+            
+            results_displayed = True
+        
+        progress.progress(100)
+        status.empty()
+        progress.empty()
+        
+        if results_displayed:
+            st.success("✅ Portfolio construction complete! Review the results above.")
+            st.caption("💡 **Tip:** Rebalance your portfolio every 3-6 months to maintain optimal weights.")
             
 
 
