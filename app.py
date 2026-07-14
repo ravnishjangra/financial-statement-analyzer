@@ -1388,7 +1388,9 @@ def create_stress_test_dashboard(analyzer):
     beta = analyzer.live_price_data.get('beta', 1.0) or 1.0; market_cap = analyzer.live_price_data.get('market_cap', 0) or 0
     engine = StressTestEngine(cp, sector, industry, beta, analyzer.currency, market_cap)
     
-    if st.button("🛡️ Run All 30 Stress Tests", type="primary", use_container_width=True):
+     # Auto-run since button is already clicked in Tab 2
+    with st.spinner("Running comprehensive stress tests..."):
+        results_df = engine.run_all_tests()
         with st.spinner("Running stress tests..."): results_df = engine.run_all_tests()
         st.success(f"✅ {len(results_df)} scenarios completed!")
         col1, col2, col3, col4 = st.columns(4)
@@ -1480,7 +1482,7 @@ def main():
     # ===== TAB 1 =====
     with tab1:
         c1, c2, c3 = st.columns([3, 1.5, 1])
-        with c1: ticker = st.text_input("Stock Ticker", value=st.session_state['current_ticker'], max_chars=50, key="input_ticker")
+        with c1: ticker = st.text_input("Stock Ticker", value=st.session_state.get('current_ticker', 'AAPL'), max_chars=50, key="input_ticker")
         with c2: exchange = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], index=["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"].index(st.session_state['current_exchange']), key="input_exchange")
         with c3: st.write(""); analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
@@ -1510,7 +1512,10 @@ def main():
                             st.session_state['current_ticker'] = s; st.session_state['current_exchange'] = "US Market"
                             st.session_state['analyze_clicked'] = True; st.rerun()
 
-        st.session_state['current_ticker'] = ticker; st.session_state['current_exchange'] = exchange
+        if ticker and ticker != st.session_state.get('current_ticker', ''):
+    st.session_state['current_ticker'] = ticker
+if exchange and exchange != st.session_state.get('current_exchange', ''):
+    st.session_state['current_exchange'] = exchange
         if analyze_btn: st.session_state['analyze_clicked'] = True
 
         if not st.session_state['analyze_clicked']:
@@ -1568,13 +1573,40 @@ def main():
 
     # ===== TAB 2 =====
     with tab2:
-        st.markdown("### 🛡️ Stress Tests")
-        st2_t = st.text_input("Ticker", "AAPL", key="st2_t"); st2_e = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="st2_e")
-        if st.button("🛡️ Run 30 Stress Tests", type="primary", key="st2_btn"):
-            em2 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
-            a2 = ProFinancialAnalyzer(st2_t, exchange=em2.get(st2_e,"Auto"))
-            with st.spinner("Loading..."): a2.get_live_price(); a2.fetch_financial_data()
-            create_stress_test_dashboard(a2)
+        st.markdown("### 🛡️ Comprehensive Stress Tests (30 Scenarios)")
+        st.markdown("Enter a ticker to stress test its price under various scenarios.")
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st2_t = st.text_input("Ticker", value="AAPL", key="stress_ticker_input")
+        with col2:
+            st2_e = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="stress_exchange_input")
+        
+        run_stress = st.button("🛡️ Run 30 Stress Tests", type="primary", use_container_width=True, key="run_stress_btn")
+        
+        if run_stress:
+            if not st2_t:
+                st.warning("Please enter a ticker.")
+            else:
+                em2 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
+                a2 = ProFinancialAnalyzer(st2_t.strip().upper(), exchange=em2.get(st2_e,"Auto"))
+                
+                with st.spinner("Loading market data..."):
+                    price_ok = a2.get_live_price()
+                
+                if not price_ok:
+                    st.error(f"Could not fetch data for {st2_t}. Try a different ticker.")
+                else:
+                    with st.spinner("Fetching company info..."):
+                        a2.fetch_financial_data()
+                    
+                    # Show current price before stress test
+                    cp = a2.live_price_data.get('current_price')
+                    if cp:
+                        st.info(f"📊 Current Price of **{a2.company_name}**: {a2.currency_symbol}{cp:.2f}")
+                    
+                    # Run and display stress tests
+                    create_stress_test_dashboard(a2)
 
     # ===== TAB 3 =====
     with tab3:
