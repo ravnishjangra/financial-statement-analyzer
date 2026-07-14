@@ -1273,7 +1273,7 @@ class PortfolioOptimizer:
         return self.efficient_frontier
 
 
-def def create_portfolio_optimization_tab():
+def create_portfolio_optimization_tab():
     """Portfolio Optimization Dashboard - Modern Portfolio Theory"""
     st.markdown('<div class="section-header">🎯 Portfolio Optimization (Modern Portfolio Theory)</div>', unsafe_allow_html=True)
     
