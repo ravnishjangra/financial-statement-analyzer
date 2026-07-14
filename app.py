@@ -2012,6 +2012,230 @@ def create_index_comparison_dashboard(analyzer):
         else:
             summary = f"🔴 **{analyzer.company_name}** underperforms **{benchmark_name}** (Alpha: {alpha_val:.1f}%)"
         st.info(summary)
+        # ===== AI INVESTMENT THESIS GENERATOR =====
+
+def generate_investment_thesis(analyzer, dcf_result=None):
+    """Generate automated investment thesis based on financial metrics"""
+    ratios = analyzer.ratios
+    cur = analyzer.currency_symbol
+    cp = analyzer.live_price_data.get('current_price')
+    
+    thesis_parts = []
+    score = 0
+    max_score = 0
+    
+    # 1. Revenue Growth
+    rev_growth = ratios.get('Revenue Growth (YoY)')
+    if rev_growth is not None:
+        max_score += 1
+        if rev_growth > 20:
+            thesis_parts.append(f"🟢 **Strong Revenue Growth:** Revenue grew {rev_growth:.1f}% YoY, indicating robust demand.")
+            score += 1
+        elif rev_growth > 10:
+            thesis_parts.append(f"🟡 **Moderate Revenue Growth:** Revenue grew {rev_growth:.1f}% YoY, showing steady expansion.")
+            score += 0.5
+        elif rev_growth > 0:
+            thesis_parts.append(f"🟠 **Slow Revenue Growth:** Revenue grew only {rev_growth:.1f}% YoY, below market average.")
+        else:
+            thesis_parts.append(f"🔴 **Revenue Decline:** Revenue declined {abs(rev_growth):.1f}% YoY, a concerning trend.")
+    
+    # 2. Profitability
+    net_margin = ratios.get('Net Profit Margin')
+    if net_margin is not None:
+        max_score += 1
+        if net_margin > 20:
+            thesis_parts.append(f"🟢 **Excellent Profitability:** Net margin of {net_margin:.1f}% shows strong pricing power.")
+            score += 1
+        elif net_margin > 10:
+            thesis_parts.append(f"🟡 **Healthy Profitability:** Net margin of {net_margin:.1f}% indicates good cost management.")
+            score += 0.5
+        else:
+            thesis_parts.append(f"🟠 **Thin Margins:** Net margin of {net_margin:.1f}% suggests competitive pressure.")
+    
+    # 3. ROE
+    roe = ratios.get('ROE')
+    if roe is not None:
+        max_score += 1
+        if roe > 20:
+            thesis_parts.append(f"🟢 **Efficient Capital Allocation:** ROE of {roe:.1f}% shows management creates shareholder value.")
+            score += 1
+        elif roe > 10:
+            thesis_parts.append(f"🟡 **Adequate Returns:** ROE of {roe:.1f}% is acceptable but not exceptional.")
+            score += 0.5
+        else:
+            thesis_parts.append(f"🔴 **Poor Returns:** ROE of {roe:.1f}% indicates inefficient use of equity.")
+    
+    # 4. Debt
+    de = ratios.get('Debt to Equity')
+    if de is not None:
+        max_score += 1
+        if de < 0.5:
+            thesis_parts.append(f"🟢 **Conservative Capital Structure:** D/E of {de:.2f} suggests low financial risk.")
+            score += 1
+        elif de < 1.5:
+            thesis_parts.append(f"🟡 **Moderate Leverage:** D/E of {de:.2f} is manageable but warrants monitoring.")
+            score += 0.5
+        else:
+            thesis_parts.append(f"🔴 **High Leverage:** D/E of {de:.2f} raises concerns about debt sustainability.")
+    
+    # 5. Liquidity
+    cr = ratios.get('Current Ratio')
+    if cr is not None:
+        max_score += 1
+        if cr > 1.5:
+            thesis_parts.append(f"🟢 **Healthy Liquidity:** Current ratio of {cr:.2f} indicates ability to meet short-term obligations.")
+            score += 1
+        elif cr > 1.0:
+            thesis_parts.append(f"🟡 **Adequate Liquidity:** Current ratio of {cr:.2f} is sufficient but not comfortable.")
+            score += 0.5
+        else:
+            thesis_parts.append(f"🔴 **Liquidity Concern:** Current ratio of {cr:.2f} may indicate cash flow issues.")
+    
+    # 6. DCF Valuation
+    if dcf_result:
+        upside = dcf_result.get('upside', 0)
+        max_score += 1
+        if upside > 20:
+            thesis_parts.append(f"🟢 **Significantly Undervalued:** DCF estimates {upside:.0f}% upside from current price of {cur}{cp:.2f}.")
+            score += 1
+        elif upside > 0:
+            thesis_parts.append(f"🟡 **Modestly Undervalued:** DCF suggests {upside:.0f}% upside, offering some margin of safety.")
+            score += 0.5
+        else:
+            thesis_parts.append(f"🔴 **Overvalued:** DCF shows {abs(upside):.0f}% downside from current market price.")
+    
+    # 7. EPS
+    eps = ratios.get('EPS')
+    ni_growth = ratios.get('Net Income Growth (YoY)')
+    if eps is not None and ni_growth is not None:
+        max_score += 1
+        if ni_growth > 15 and eps > 0:
+            thesis_parts.append(f"🟢 **Strong Earnings:** EPS of {cur}{eps:.2f} with {ni_growth:.1f}% growth shows earnings momentum.")
+            score += 1
+        elif eps > 0:
+            thesis_parts.append(f"🟡 **Stable Earnings:** EPS of {cur}{eps:.2f} indicates consistent profitability.")
+            score += 0.5
+    
+    # 8. Market Position
+    market_cap = analyzer.live_price_data.get('market_cap', 0)
+    sector = analyzer.financials.get('sector', 'Unknown')
+    if market_cap > 0:
+        thesis_parts.append(f"📊 **Market Position:** {analyzer.company_name} operates in **{sector}** with market cap of **{analyzer._format_amount(market_cap)}**.")
+    
+    # Overall
+    if max_score > 0:
+        final_score = (score / max_score) * 100
+        if final_score >= 75:
+            overall = "🟢 **OVERALL: STRONG FUNDAMENTALS** — The company demonstrates robust financial health across multiple metrics."
+        elif final_score >= 50:
+            overall = "🟡 **OVERALL: MIXED SIGNALS** — While some metrics are positive, there are areas requiring closer scrutiny."
+        elif final_score >= 25:
+            overall = "🟠 **OVERALL: BELOW AVERAGE** — Several financial indicators suggest caution."
+        else:
+            overall = "🔴 **OVERALL: HIGH RISK** — Multiple warning signs across key financial metrics."
+    else:
+        overall = "⚠️ **INSUFFICIENT DATA** — Not enough financial data to generate a complete thesis."
+    
+    return {'thesis_parts': thesis_parts, 'overall': overall, 'score': f"{score:.0f}/{max_score:.0f}" if max_score > 0 else "N/A", 'score_pct': (score/max_score*100) if max_score > 0 else 0}
+
+
+def create_investment_thesis_dashboard(analyzer):
+    """Investment Thesis Dashboard"""
+    st.markdown('<div class="section-header">📝 AI-Generated Investment Thesis</div>', unsafe_allow_html=True)
+    
+    income = analyzer.financials.get('income')
+    cashflow = analyzer.financials.get('cashflow')
+    cp = analyzer.live_price_data.get('current_price')
+    
+    # Quick DCF for valuation context
+    dcf_result = None
+    if cp and income is not None and not income.empty:
+        fcf = analyzer._safe_get(cashflow, ['Free Cash Flow']) if cashflow is not None else 0
+        if not fcf:
+            ni = analyzer._safe_get(income, ['Net Income'])
+            fcf = ni * 0.8 if ni else 0
+        if fcf and fcf > 0:
+            shares = analyzer._safe_get(income, ['Diluted Average Shares']) or 1e6
+            beta = analyzer.live_price_data.get('beta', 1.0) or 1.0
+            rg = analyzer.ratios.get('Revenue Growth (YoY)', 10) or 10
+            rf = 0.072 if analyzer.currency == 'INR' else 0.045
+            mr = 0.12 if analyzer.currency == 'INR' else 0.10
+            dcf = AdvancedDCF(fcf, shares, cp, max(0.02, min(rg/100, 0.35)), beta, rf, mr)
+            dcf_result = dcf.calculate()
+    
+    thesis = generate_investment_thesis(analyzer, dcf_result)
+    score_pct = thesis['score_pct']
+    score_color = "#10b981" if score_pct >= 75 else "#f59e0b" if score_pct >= 50 else "#ef4444"
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #1e293b, #0f172a); border: 2px solid {score_color}; padding: 1.5rem; border-radius: 16px; margin-bottom: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="color: #e2e8f0; margin: 0;">📝 {analyzer.company_name}</h3>
+            <span style="font-size: 1.5rem; font-weight: 900; color: {score_color};">{thesis['score']}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    for part in thesis['thesis_parts']:
+        st.markdown(f"- {part}")
+    
+    st.markdown("---")
+    st.markdown(f"### {thesis['overall']}")
+    st.caption("💡 Auto-generated from reported financial data. Always do your own research before investing.")
+
+
+# ===== HISTORICAL DCF TRACKING =====
+
+class HistoricalDCFTracker:
+    """Track DCF assumptions over multiple periods"""
+    
+    @staticmethod
+    def calculate_historical_growth(income_df):
+        if income_df is None or income_df.empty:
+            return None
+        rev_key = None
+        for key in ['Total Revenue', 'Revenue']:
+            if key in income_df.index:
+                rev_key = key
+                break
+        if not rev_key:
+            return None
+        rev_data = income_df.loc[rev_key]
+        years = len(rev_data)
+        if years < 2:
+            return None
+        growth_rates = []
+        for i in range(years - 1):
+            if rev_data.iloc[i+1] and rev_data.iloc[i+1] != 0:
+                growth = (rev_data.iloc[i] - rev_data.iloc[i+1]) / abs(rev_data.iloc[i+1]) * 100
+                growth_rates.append({'period': f"Year {i+1}", 'revenue': rev_data.iloc[i], 'growth': growth})
+        if growth_rates:
+            avg_growth = np.mean([g['growth'] for g in growth_rates])
+            median_growth = np.median([g['growth'] for g in growth_rates])
+            return {'growth_rates': growth_rates, 'average': avg_growth, 'median': median_growth,
+                    'min': min(g['growth'] for g in growth_rates), 'max': max(g['growth'] for g in growth_rates),
+                    'years': len(growth_rates)}
+        return None
+
+
+def create_historical_dcf_tracker(analyzer):
+    """Display historical growth for DCF context"""
+    income = analyzer.financials.get('income')
+    if income is None or income.empty:
+        return
+    hist = HistoricalDCFTracker.calculate_historical_growth(income)
+    if hist:
+        with st.expander("📊 Historical Revenue Growth (DCF Context)", expanded=False):
+            st.markdown(f"**{hist['years']} years** tracked | Avg: **{hist['average']:.1f}%** | Median: **{hist['median']:.1f}%** | Range: {hist['min']:.1f}% to {hist['max']:.1f}%")
+            years_labels = [g['period'] for g in hist['growth_rates']]
+            growths = [g['growth'] for g in hist['growth_rates']]
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=years_labels, y=growths, marker_color='#667eea',
+                                 text=[f"{g:.1f}%" for g in growths], textposition='outside'))
+            fig.add_hline(y=hist['average'], line_dash="dash", line_color="#10b981",
+                          annotation_text=f"Avg: {hist['average']:.1f}%")
+            fig.update_layout(title='Historical Revenue Growth Rates', template='plotly_white', height=300)
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ===== FORMATTING =====
@@ -2359,6 +2583,8 @@ def main():
             create_valuation_dashboard(analyzer)
             create_advanced_scores_dashboard(analyzer)
             create_index_comparison_dashboard(analyzer)
+            create_investment_thesis_dashboard(analyzer)
+            create_historical_dcf_tracker(analyzer)
                 
                 
             # Peer Comparison
