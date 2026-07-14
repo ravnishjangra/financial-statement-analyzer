@@ -1404,17 +1404,18 @@ def create_stress_test_dashboard(analyzer):
             elif 'HIGH' in str(val): return 'background-color: rgba(245,158,11,0.2); color: #f59e0b; font-weight: bold'
             elif 'POSITIVE' in str(val) or 'WINNER' in str(val): return 'background-color: rgba(16,185,129,0.2); color: #10b981; font-weight: bold'
             return ''
+            
         try:
-    styled_df = results_df.style.applymap(color_severity, subset=['Severity'])
-    st.dataframe(styled_df, use_container_width=True, height=600)
-except:
-    st.dataframe(results_df, use_container_width=True, height=600)
+            styled_df = results_df.style.applymap(color_severity, subset=['Severity'])
+            st.dataframe(styled_df, use_container_width=True, height=600)
+        except:
+            st.dataframe(results_df, use_container_width=True, height=600)
         
         severity_counts = results_df['Severity'].str.extract(r'(🔴|🟠|🟡|🟢|💀)')[0].value_counts()
         fig = go.Figure(data=[go.Pie(labels=severity_counts.index, values=severity_counts.values, hole=0.4, marker_colors=['#ef4444','#f59e0b','#eab308','#10b981','#000000'])])
-        fig.update_layout(title='Severity Distribution', template='plotly_white', height=350); st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(title='Severity Distribution', template='plotly_white', height=350)
+        st.plotly_chart(fig, use_container_width=True)
         st.caption("💡 Sector-specific sensitivities and beta-adjusted impacts.")
-
 
 def create_technical_dashboard(analyzer):
     st.markdown('<div class="section-header">📈 Technical Analysis</div>', unsafe_allow_html=True)
@@ -1505,7 +1506,7 @@ def main():
                     st.session_state['current_ticker'] = stock
                     st.session_state['current_exchange'] = exch
                     st.session_state['analyze_clicked'] = True
-                                        st.session_state['last_input_source'] = 'quick_access'
+                    st.session_state['last_input_source'] = 'quick_access'
                     st.rerun()
 
         with st.expander("📋 More Stocks"):
