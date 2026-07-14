@@ -1484,76 +1484,96 @@ def main():
 
     tab1, tab2, tab3, tab4 = st.tabs(["🔍 Stock Analysis", "🛡️ Stress Tests", "📈 Technical Analysis", "🎯 Portfolio Optimizer"])
 
-        # ===== TAB 1 =====
+           # ===== TAB 1 =====
     with tab1:
         c1, c2, c3 = st.columns([3, 1.5, 1])
-        with c1: 
-            ticker = st.text_input("Stock Ticker", value=st.session_state.get('current_ticker', 'AAPL'), max_chars=50, key="input_ticker")
-        with c2: 
-            exchange = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], 
-                                    index=["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"].index(st.session_state.get('current_exchange', 'Auto-detect')), 
-                                    key="input_exchange")
-        with c3: 
-            st.write(""); 
+        with c1:
+            ticker = st.text_input("Stock Ticker", key="main_ticker_input", placeholder="e.g., AAPL, RELIANCE")
+        with c2:
+            exchange = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="main_exchange_input")
+        with c3:
+            st.write("")
             analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
+
+        # Use whatever is in the text input
+        if ticker:
+            st.session_state['current_ticker'] = ticker.upper().strip()
+        if exchange:
+            st.session_state['current_exchange'] = exchange
 
         st.markdown("#### ⚡ Quick Access")
         qcols = st.columns(8)
-        quick_data = [("AAPL","US Market"),("RELIANCE","NSE India (.NS)"),("TCS","NSE India (.NS)"),("MSFT","US Market"),("TATAMOTORS","NSE India (.NS)"),("INFY","NSE India (.NS)"),("GOOGL","US Market"),("HDFCBANK","NSE India (.NS)")]
-        for i, (stock, exch) in enumerate(quick_data):
+        quick_list = ["AAPL", "RELIANCE", "TCS", "MSFT", "TATAMOTORS", "INFY", "GOOGL", "HDFCBANK"]
+        exchange_map = {
+            "AAPL": "US Market", "MSFT": "US Market", "GOOGL": "US Market",
+            "RELIANCE": "NSE India (.NS)", "TCS": "NSE India (.NS)", 
+            "TATAMOTORS": "NSE India (.NS)", "INFY": "NSE India (.NS)",
+            "HDFCBANK": "NSE India (.NS)"
+        }
+        
+        for i, stock in enumerate(quick_list):
             with qcols[i]:
-                if st.button(stock, use_container_width=True, key=f"qa_{stock}_{i}"):
+                if st.button(stock, key=f"quickbtn_{stock}", use_container_width=True):
                     st.session_state['current_ticker'] = stock
-                    st.session_state['current_exchange'] = exch
+                    st.session_state['current_exchange'] = exchange_map[stock]
                     st.session_state['analyze_clicked'] = True
-                    st.session_state['last_input_source'] = 'quick_access'
                     st.rerun()
 
         with st.expander("📋 More Stocks"):
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**Indian Stocks**"); icols = st.columns(4)
-                for i, t in enumerate(list(INDIAN_STOCKS_DB.keys())[:24]):
-                    with icols[i%4]:
-                        if st.button(t, use_container_width=True, key=f"ind_{t}"):
-                            st.session_state['current_ticker'] = t
-                            st.session_state['current_exchange'] = "NSE India (.NS)"
-                            st.session_state['analyze_clicked'] = True
-                            st.rerun()
+                st.markdown("**Indian Stocks**")
+                for t in list(INDIAN_STOCKS_DB.keys())[:20]:
+                    if st.button(t, key=f"more_ind_{t}", use_container_width=True):
+                        st.session_state['current_ticker'] = t
+                        st.session_state['current_exchange'] = "NSE India (.NS)"
+                        st.session_state['analyze_clicked'] = True
+                        st.rerun()
             with c2:
-                st.markdown("**US Stocks**"); ucols = st.columns(4)
-                for i, s in enumerate(["AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","JPM","V","WMT","NFLX","ADBE","ORCL","CRM","AMD","INTC"]):
-                    with ucols[i%4]:
-                        if st.button(s, use_container_width=True, key=f"us_{s}"):
-                            st.session_state['current_ticker'] = s
-                            st.session_state['current_exchange'] = "US Market"
-                            st.session_state['analyze_clicked'] = True
-                            st.rerun()
+                st.markdown("**US Stocks**")
+                for s in ["AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","JPM"]:
+                    if st.button(s, key=f"more_us_{s}", use_container_width=True):
+                        st.session_state['current_ticker'] = s
+                        st.session_state['current_exchange'] = "US Market"
+                        st.session_state['analyze_clicked'] = True
+                        st.rerun()
 
-        # Update session state from text inputs (only if not set by quick access)
-        if 'current_ticker' not in st.session_state or st.session_state.get('last_input_source') != 'quick_access':
-            st.session_state['current_ticker'] = ticker
-        st.session_state['current_exchange'] = exchange
-        st.session_state['last_input_source'] = 'text_input'
-        
         if analyze_btn:
             st.session_state['analyze_clicked'] = True
-            em = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
-            analyzer = ProFinancialAnalyzer(st.session_state['current_ticker'], exchange=em.get(st.session_state['current_exchange'],"Auto"))
-            with st.spinner("🔍 Analyzing..."): analyzer.get_live_price(); analyzer.fetch_financial_data(); analyzer.calculate_all_ratios()
 
-            pd_d = analyzer.live_price_data; cur = analyzer.currency_symbol; cp = pd_d.get('current_price'); pc = pd_d.get('previous_close')
+        if not st.session_state.get('analyze_clicked', False):
+            st.markdown('<div style="text-align:center;padding:4rem;"><h2>🏦 Enterprise Financial Analysis Platform</h2><p>Enter a ticker or click Quick Access, then Analyze</p></div>', unsafe_allow_html=True)
+        else:
+            em = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
+            current_ticker = st.session_state.get('current_ticker', 'AAPL')
+            current_exchange = st.session_state.get('current_exchange', 'Auto-detect')
+            
+            analyzer = ProFinancialAnalyzer(current_ticker, exchange=em.get(current_exchange,"Auto"))
+            with st.spinner("🔍 Analyzing..."): 
+                analyzer.get_live_price()
+                analyzer.fetch_financial_data()
+                analyzer.calculate_all_ratios()
+
+            pd_d = analyzer.live_price_data
+            cur = analyzer.currency_symbol
+            cp = pd_d.get('current_price')
+            pc = pd_d.get('previous_close')
+            
             if cp and pc:
-                ch = cp - pc; ch_pct = (ch/pc)*100; color = "price-up" if ch>=0 else "price-down"; arrow = "▲" if ch>=0 else "▼"
-                st.markdown(f'<div class="live-price-box"><h2>{analyzer.company_name}</h2><div class="{color}">{cur}{cp:.2f} {arrow}</div><div>{cur}{abs(ch):.2f} ({ch_pct:+.2f}%)</div><div style="margin-top:1rem;display:flex;justify-content:center;gap:2rem;"><span>H:{cur}{pd_d.get("day_high","N/A")}</span><span>L:{cur}{pd_d.get("day_low","N/A")}</span><span>Vol:{pd_d.get("volume","N/A"):,.0f}</span></div></div>', unsafe_allow_html=True)
+                ch = cp - pc
+                ch_pct = (ch/pc)*100
+                color = "price-up" if ch>=0 else "price-down"
+                arrow = "▲" if ch>=0 else "▼"
+                st.markdown(f'<div class="live-price-box"><h2>{analyzer.company_name}</h2><div class="{color}">{cur}{cp:.2f} {arrow}</div><div>{cur}{abs(ch):.2f} ({ch_pct:+.2f}%)</div></div>', unsafe_allow_html=True)
 
             rec = analyzer.live_price_data.get('recommendation','').upper()
             if rec:
                 rc = {'BUY':'#10b981','STRONG_BUY':'#10b981','HOLD':'#f59e0b','SELL':'#ef4444','STRONG_SELL':'#ef4444'}.get(rec,'#666')
-                st.markdown(f'<div style="background-color:{rc};padding:0.75rem;border-radius:12px;color:white;text-align:center;font-weight:700;">🎯 {rec.replace("_"," ")} • {analyzer.live_price_data.get("number_of_analysts","N/A")} Analysts</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background-color:{rc};padding:0.75rem;border-radius:12px;color:white;text-align:center;font-weight:700;">🎯 {rec.replace("_"," ")}</div>', unsafe_allow_html=True)
 
-            st.markdown(f'<div class="info-box"><span>📊 {analyzer.company_name} | {analyzer.financials.get("sector","N/A")} | {analyzer.currency}</span><span>💰 MCap: {analyzer._format_amount(pd_d.get("market_cap",0))}</span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="info-box">📊 {analyzer.company_name} | {analyzer.financials.get("sector","N/A")} | {analyzer.currency} | MCap: {analyzer._format_amount(pd_d.get("market_cap",0))}</div>', unsafe_allow_html=True)
 
+            # Ratios
             st.markdown('<div class="section-header">📊 Key Ratios</div>', unsafe_allow_html=True)
             ratios = analyzer.ratios
             if ratios:
@@ -1566,17 +1586,18 @@ def main():
 
             create_valuation_dashboard(analyzer)
 
+            # Peer Comparison
             group_name, peer_list = detect_peer_group(analyzer.ticker)
             if peer_list:
                 peer_list = [p for p in peer_list if p!=analyzer.ticker][:5]
-                all_t = [analyzer.ticker] + peer_list
-                if len(all_t)>=2:
+                if len(peer_list) >= 1:
                     with st.spinner("Fetching peers..."):
-                        pdf = get_peer_comparison(analyzer.ticker, all_t)
+                        pdf = get_peer_comparison(analyzer.ticker, [analyzer.ticker] + peer_list)
                         if not pdf.empty:
                             st.markdown('<div class="section-header">🏢 Peer Comparison</div>', unsafe_allow_html=True)
                             st.dataframe(pdf, use_container_width=True, hide_index=True)
 
+            # Financial Statements
             st.markdown('<div class="section-header">📋 Financial Statements</div>', unsafe_allow_html=True)
             t1, t2, t3 = st.tabs(["Income","Balance","Cash Flow"])
             for tab, key, name in [(t1,'income','Income'),(t2,'balance','Balance'),(t3,'cashflow','Cash')]:
@@ -1585,7 +1606,6 @@ def main():
                     if df is not None and not df.empty:
                         formatted = format_financial_df(df, analyzer.currency_symbol, analyzer.currency)
                         if formatted is not None: st.dataframe(formatted, use_container_width=True)
-                        with st.expander("📥 Download"): st.download_button(f"Download {name}", df.to_csv(), f"{analyzer.original_ticker}_{key}.csv","text/csv")
                     else: st.info(f"{name} not available.")
 
     # ===== TAB 2 =====
