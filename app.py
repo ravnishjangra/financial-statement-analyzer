@@ -1162,15 +1162,31 @@ class StressTestEngine:
         # 25. Correlation Breakdown
         results.append({'Test': 'Correlation Breakdown', 'Scenario': 'All assets move together', 'Impact Price': self.price*0.75, 'Loss %': -25, 'Severity': '🔴 CRITICAL'})
         
-        # 26. Monte Carlo VaR
+        # 26. Monte Carlo VaR 
         np.random.seed(42)
-        sim_returns = np.random.normal(-0.0005, 0.02, 1000)
-        var_95 = np.percentile(sim_returns, 5)
-        results.append({'Test': 'Monte Carlo VaR (95%)', 'Scenario': '1000 simulated paths', 'Impact Price': self.price*(1+var_95*252), 'Loss %': var_95*252*100, 'Severity': '🟠 HIGH'})
+        daily_returns = np.random.normal(0.0005, 0.02, (1000, 252))  # 1000 paths, 252 days each
+        annual_returns = (1 + daily_returns).prod(axis=1) - 1  # Compound daily to annual
+        var_95 = np.percentile(annual_returns, 5)  # 5th percentile worst case
+        impact = self.price * (1 + var_95)
+        loss_pct = var_95 * 100
+        results.append({
+            'Test': 'Monte Carlo VaR (95%)', 
+            'Scenario': '1000 simulated annual return paths', 
+            'Impact Price': max(impact, self.price * 0.01),  # Floor at 1% of current price
+            'Loss %': max(loss_pct, -99),  # Max loss capped at -99%
+            'Severity': '🔴 CRITICAL' if loss_pct < -30 else '🟠 HIGH' if loss_pct < -15 else '🟡 MODERATE'
+        })
         
-        # 27. VaR Comparison
-        for method, ret in [('Historical', -0.25), ('Parametric', -0.30), ('Monte Carlo', -0.28)]:
-            results.append({'Test': f'VaR ({method})', 'Scenario': f'{method} VaR estimate', 'Impact Price': self.price*(1+ret), 'Loss %': ret*100, 'Severity': '🔴 CRITICAL'})
+        # 27. VaR Comparison 
+        for method, ret in [('Historical', -0.15), ('Parametric', -0.18), ('Monte Carlo', -0.16)]:
+            impact = max(self.price * (1 + ret), self.price * 0.10)  # Floor at 10%
+            results.append({
+                'Test': f'VaR ({method})', 
+                'Scenario': f'{method} Value at Risk (annual)', 
+                'Impact Price': impact, 
+                'Loss %': max(ret * 100, -90), 
+                'Severity': '🔴 CRITICAL' if ret < -0.25 else '🟠 HIGH' if ret < -0.15 else '🟡 MODERATE'
+            })
         
         # 28. Custom Scenarios
         for name, pct in [('IT -20%', -0.20 if 'Technology' in str(self.sector) else -0.05), ('Oil +30%', 0.30 if 'Energy' in str(self.sector) else -0.10)]:
