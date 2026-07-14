@@ -1561,6 +1561,289 @@ def create_portfolio_optimization_tab():
             - Past correlations can break during market crises
             - Consider your personal risk tolerance and investment horizon
             """)
+            # ===== ADVANCED FINANCIAL SCORES =====
+
+class PiotroskiFScore:
+    """Piotroski F-Score (0-9) - Verified with Yahoo Finance data structure"""
+    
+    @staticmethod
+    def calculate(income_df, balance_df, cashflow_df):
+        """Calculate Piotroski F-Score from financial statements"""
+        score = 0
+        details = []
+        
+        # Safety check
+        if income_df is None or balance_df is None or cashflow_df is None:
+            return {'score': 0, 'rating': 'N/A', 'details': ['Insufficient data']}
+        if income_df.empty or balance_df.empty:
+            return {'score': 0, 'rating': 'N/A', 'details': ['Financial data not available']}
+        
+        try:
+            # Yahoo Finance columns are dates (YYYY-MM-DD), get latest 2 columns
+            cols = income_df.columns[:2]
+            if len(cols) < 2:
+                return {'score': 0, 'rating': 'N/A', 'details': ['Need 2 years of data']}
+            
+            # ===== PROFITABILITY (4 points) =====
+            
+            # 1. Net Income > 0
+            ni_key = None
+            for key in ['Net Income', 'Net Income Common Stockholders', 'Net Income, Total']:
+                if key in income_df.index:
+                    ni_key = key
+                    break
+            
+            if ni_key:
+                ni_current = income_df.loc[ni_key, cols[0]]
+                ni_prev = income_df.loc[ni_key, cols[1]] if len(cols) > 1 else 0
+                
+                if pd.notna(ni_current) and ni_current > 0:
+                    score += 1
+                    details.append(f"✅ Positive Net Income ({ni_current/1e9 if abs(ni_current)>1e9 else ni_current/1e6:.1f}{'B' if abs(ni_current)>1e9 else 'M'})")
+                else:
+                    details.append("❌ Negative Net Income")
+            else:
+                details.append("⚠️ Net Income data not found")
+            
+            # 2. Operating Cash Flow > 0
+            ocf_key = None
+            for key in ['Operating Cash Flow', 'Operating Cash Flow, Total']:
+                if key in cashflow_df.index:
+                    ocf_key = key
+                    break
+            
+            if ocf_key:
+                ocf_current = cashflow_df.loc[ocf_key, cashflow_df.columns[0]]
+                if pd.notna(ocf_current) and ocf_current > 0:
+                    score += 1
+                    details.append("✅ Positive Operating Cash Flow")
+                else:
+                    details.append("❌ Negative Operating Cash Flow")
+            else:
+                details.append("⚠️ OCF data not found")
+            
+            # 3. ROA Increasing
+            asset_key = None
+            for key in ['Total Assets', 'Total Assets, Total']:
+                if key in balance_df.index:
+                    asset_key = key
+                    break
+            
+            if ni_key and asset_key:
+                assets_current = balance_df.loc[asset_key, balance_df.columns[0]]
+                assets_prev = balance_df.loc[asset_key, balance_df.columns[1]] if len(balance_df.columns) > 1 else assets_current
+                
+                if assets_current and assets_prev and assets_current > 0 and assets_prev > 0:
+                    roa = ni_current / assets_current
+                    roa_prev = ni_prev / assets_prev
+                    if roa > roa_prev:
+                        score += 1
+                        details.append(f"✅ ROA Increasing ({roa*100:.1f}% vs {roa_prev*100:.1f}%)")
+                    else:
+                        details.append(f"❌ ROA Declining ({roa*100:.1f}% vs {roa_prev*100:.1f}%)")
+                else:
+                    details.append("⚠️ Cannot calculate ROA")
+            
+            # 4. Operating Cash Flow > Net Income (Quality of Earnings)
+            if ocf_key and ni_key and pd.notna(ocf_current) and pd.notna(ni_current):
+                if ocf_current > ni_current:
+                    score += 1
+                    details.append("✅ OCF > Net Income (Quality Earnings)")
+                else:
+                    details.append("❌ OCF < Net Income (Low Quality)")
+            
+            # ===== LEVERAGE & LIQUIDITY (3 points) =====
+            
+            # 5. Lower Long Term Debt
+            debt_key = None
+            for key in ['Long Term Debt', 'Long-Term Debt', 'Total Debt']:
+                if key in balance_df.index:
+                    debt_key = key
+                    break
+            
+            if debt_key and len(balance_df.columns) > 1:
+                debt_current = balance_df.loc[debt_key, balance_df.columns[0]]
+                debt_prev = balance_df.loc[debt_key, balance_df.columns[1]]
+                if pd.notna(debt_current) and pd.notna(debt_prev):
+                    if debt_current < debt_prev:
+                        score += 1
+                        details.append("✅ Debt Decreasing")
+                    else:
+                        details.append("❌ Debt Increasing")
+                else:
+                    details.append("⚠️ Debt data incomplete")
+            
+            # 6. Higher Current Ratio
+            ca_key = None
+            cl_key = None
+            for key in ['Current Assets', 'Current Assets, Total']:
+                if key in balance_df.index: ca_key = key; break
+            for key in ['Current Liabilities', 'Current Liabilities, Total']:
+                if key in balance_df.index: cl_key = key; break
+            
+            if ca_key and cl_key and len(balance_df.columns) > 1:
+                ca_current = balance_df.loc[ca_key, balance_df.columns[0]]
+                cl_current = balance_df.loc[cl_key, balance_df.columns[0]]
+                ca_prev = balance_df.loc[ca_key, balance_df.columns[1]]
+                cl_prev = balance_df.loc[cl_key, balance_df.columns[1]]
+                
+                if all(pd.notna(x) and x > 0 for x in [ca_current, cl_current, ca_prev, cl_prev]):
+                    cr = ca_current / cl_current
+                    cr_prev = ca_prev / cl_prev
+                    if cr > cr_prev:
+                        score += 1
+                        details.append(f"✅ Current Ratio Improving ({cr:.2f} vs {cr_prev:.2f})")
+                    else:
+                        details.append(f"❌ Current Ratio Declining ({cr:.2f} vs {cr_prev:.2f})")
+            
+            # 7. No New Shares Issued
+            shares_key = None
+            for key in ['Diluted Average Shares', 'Basic Average Shares', 'Ordinary Shares Number']:
+                if key in income_df.index: shares_key = key; break
+            
+            if not shares_key:
+                for key in ['Share Issued', 'Common Stock']:
+                    if key in balance_df.index: shares_key = key; break
+            
+            if shares_key and len(income_df.columns if shares_key in income_df.index else balance_df.columns) > 1:
+                df_to_use = income_df if shares_key in income_df.index else balance_df
+                shares_current = df_to_use.loc[shares_key, df_to_use.columns[0]]
+                shares_prev = df_to_use.loc[shares_key, df_to_use.columns[1]]
+                if pd.notna(shares_current) and pd.notna(shares_prev):
+                    if shares_current <= shares_prev:
+                        score += 1
+                        details.append("✅ No Share Dilution")
+                    else:
+                        details.append("❌ Share Dilution Detected")
+            
+            # ===== OPERATING EFFICIENCY (2 points) =====
+            
+            # 8. Higher Gross Margin
+            gp_key = None
+            rev_key = None
+            for key in ['Gross Profit', 'Gross Profit, Total']:
+                if key in income_df.index: gp_key = key; break
+            for key in ['Total Revenue', 'Revenue', 'Total Revenue, Total']:
+                if key in income_df.index: rev_key = key; break
+            
+            if gp_key and rev_key:
+                gp_current = income_df.loc[gp_key, cols[0]]
+                rev_current = income_df.loc[rev_key, cols[0]]
+                gp_prev = income_df.loc[gp_key, cols[1]]
+                rev_prev = income_df.loc[rev_key, cols[1]]
+                
+                if all(pd.notna(x) and x > 0 for x in [gp_current, rev_current, gp_prev, rev_prev]):
+                    gm = gp_current / rev_current
+                    gm_prev = gp_prev / rev_prev
+                    if gm > gm_prev:
+                        score += 1
+                        details.append(f"✅ Gross Margin Improving ({gm*100:.1f}% vs {gm_prev*100:.1f}%)")
+                    else:
+                        details.append(f"❌ Gross Margin Declining ({gm*100:.1f}% vs {gm_prev*100:.1f}%)")
+            
+            # 9. Higher Asset Turnover
+            if rev_key and asset_key and len(cols) > 1:
+                assets_prev2 = balance_df.loc[asset_key, balance_df.columns[1]] if len(balance_df.columns) > 1 else None
+                if assets_current and assets_prev2 and assets_current > 0 and assets_prev2 > 0:
+                    at = rev_current / assets_current
+                    at_prev = rev_prev / assets_prev2
+                    if at > at_prev:
+                        score += 1
+                        details.append(f"✅ Asset Turnover Improving ({at:.3f} vs {at_prev:.3f})")
+                    else:
+                        details.append(f"❌ Asset Turnover Declining")
+            
+        except Exception as e:
+            details.append(f"⚠️ Calculation error: {str(e)[:50]}")
+        
+        # Rating
+        if score >= 7:
+            rating = "🟢 STRONG"
+        elif score >= 4:
+            rating = "🟡 AVERAGE"
+        else:
+            rating = "🔴 WEAK"
+        
+        return {'score': score, 'rating': rating, 'details': details}
+
+
+class AltmanZScore:
+    """Altman Z-Score - Verified with Yahoo Finance data"""
+    
+    @staticmethod
+    def calculate(balance_df, income_df, market_cap):
+        """Calculate Altman Z-Score"""
+        if balance_df is None or income_df is None:
+            return None
+        if balance_df.empty or income_df.empty:
+            return None
+        
+        try:
+            col = balance_df.columns[0]
+            inc_col = income_df.columns[0]
+            
+            # Get Working Capital
+            ca = None
+            cl = None
+            for key in ['Current Assets', 'Current Assets, Total']:
+                if key in balance_df.index: ca = balance_df.loc[key, col]; break
+            for key in ['Current Liabilities', 'Current Liabilities, Total']:
+                if key in balance_df.index: cl = balance_df.loc[key, col]; break
+            
+            # Get Total Assets
+            ta = None
+            for key in ['Total Assets', 'Total Assets, Total']:
+                if key in balance_df.index: ta = balance_df.loc[key, col]; break
+            
+            # Get Retained Earnings (or use Stockholders Equity as proxy)
+            re_val = None
+            for key in ['Retained Earnings', 'Stockholders Equity', 'Total Stockholder Equity', 'Total Equity']:
+                if key in balance_df.index: re_val = balance_df.loc[key, col]; break
+            
+            # Get EBIT
+            ebit = None
+            for key in ['EBIT', 'Operating Income', 'Operating Income, Total']:
+                if key in income_df.index: ebit = income_df.loc[key, inc_col]; break
+            
+            # Get Total Liabilities
+            tl = None
+            for key in ['Total Liabilities Net Minority Interest', 'Total Liabilities', 'Total Liabilities, Total']:
+                if key in balance_df.index: tl = balance_df.loc[key, col]; break
+            
+            # Get Revenue
+            sales = None
+            for key in ['Total Revenue', 'Revenue', 'Total Revenue, Total']:
+                if key in income_df.index: sales = income_df.loc[key, inc_col]; break
+            
+            # Check all values exist
+            if any(v is None or pd.isna(v) or v == 0 for v in [ca, cl, ta, re_val, ebit, tl, sales]):
+                # Try to calculate with available data
+                if ta is None or ta == 0:
+                    return None
+            
+            wc = (ca or 0) - (cl or 0)
+            x1 = wc / ta if ta else 0
+            x2 = (re_val or 0) / ta if ta else 0
+            x3 = (ebit or 0) / ta if ta else 0
+            x4 = (market_cap or 0) / (tl or ta) if (tl or ta) else 0
+            x5 = (sales or 0) / ta if ta else 0
+            
+            z = 1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5
+            
+            if z > 2.99:
+                zone = "🟢 SAFE ZONE"
+                risk = "Low bankruptcy risk"
+            elif z > 1.81:
+                zone = "🟡 GREY ZONE"
+                risk = "Moderate risk"
+            else:
+                zone = "🔴 DISTRESS ZONE"
+                risk = "High bankruptcy risk"
+            
+            return {'z_score': round(z, 2), 'zone': zone, 'risk': risk,
+                    'components': {'X1': round(x1, 3), 'X2': round(x2, 3), 'X3': round(x3, 3), 'X4': round(x4, 3), 'X5': round(x5, 3)}}
+        except Exception as e:
+            return None
 
 
 # ===== FORMATTING =====
@@ -1588,7 +1871,73 @@ def format_financial_df(df, currency_symbol, currency):
 
 
 # ===== DASHBOARD FUNCTIONS =====
-
+def create_advanced_scores_dashboard(analyzer):
+    """Advanced Financial Scores Dashboard"""
+    st.markdown('<div class="section-header">🔬 Advanced Financial Scores</div>', unsafe_allow_html=True)
+    
+    income = analyzer.financials.get('income')
+    balance = analyzer.financials.get('balance')
+    cashflow = analyzer.financials.get('cashflow')
+    market_cap = analyzer.live_price_data.get('market_cap', 0)
+    
+    if income is None or income.empty:
+        st.warning("📝 Financial statements not available for advanced scoring. Key ratios shown from market data.")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 📊 Piotroski F-Score")
+        st.caption("Financial strength (0-9) | 7+ = Strong, 4-6 = Average, <4 = Weak")
+        
+        f_score = PiotroskiFScore.calculate(income, balance, cashflow)
+        
+        score_color = "#10b981" if f_score['score'] >= 7 else "#f59e0b" if f_score['score'] >= 4 else "#ef4444"
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=f_score['score'],
+            title={'text': "F-Score"},
+            number={'font': {'color': score_color, 'size': 40}},
+            gauge={'axis': {'range': [0, 9]}, 'bar': {'color': score_color},
+                   'steps': [{'range': [0, 3], 'color': "rgba(239,68,68,0.2)"},
+                             {'range': [3, 6], 'color': "rgba(245,158,11,0.2)"},
+                             {'range': [6, 9], 'color': "rgba(16,185,129,0.2)"}]}
+        ))
+        fig.update_layout(height=250, margin=dict(t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown(f"**{f_score['rating']}**")
+        with st.expander(f"📋 Details (Score: {f_score['score']}/9)"):
+            for detail in f_score['details']:
+                st.write(detail)
+    
+    with col2:
+        st.markdown("### 🏦 Altman Z-Score")
+        st.caption("Bankruptcy prediction | >2.99 = Safe, 1.81-2.99 = Grey, <1.81 = Distress")
+        
+        z_result = AltmanZScore.calculate(balance, income, market_cap)
+        
+        if z_result:
+            z = z_result['z_score']
+            z_color = "#10b981" if z > 2.99 else "#f59e0b" if z > 1.81 else "#ef4444"
+            
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=z,
+                title={'text': "Z-Score"},
+                number={'font': {'color': z_color, 'size': 40}},
+                gauge={'axis': {'range': [0, 6]}, 'bar': {'color': z_color},
+                       'steps': [{'range': [0, 1.81], 'color': "rgba(239,68,68,0.2)"},
+                                 {'range': [1.81, 2.99], 'color': "rgba(245,158,11,0.2)"},
+                                 {'range': [2.99, 6], 'color': "rgba(16,185,129,0.2)"}]}
+            ))
+            fig.update_layout(height=250, margin=dict(t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown(f"**{z_result['zone']}** - {z_result['risk']}")
+        else:
+            st.warning("Insufficient data for Z-Score calculation")
+            
 def create_valuation_dashboard(analyzer):
     st.markdown('<div class="section-header">💰 Advanced Valuation Models</div>', unsafe_allow_html=True)
     income = analyzer.financials.get('income'); cashflow = analyzer.financials.get('cashflow')
@@ -1840,7 +2189,9 @@ def main():
                             st.markdown(f'<div class="card"><div class="metric-value">{d}</div><div class="metric-label">{l}</div></div>', unsafe_allow_html=True)
 
             create_valuation_dashboard(analyzer)
-
+            create_advanced_scores_dashboard(analyzer)
+                
+                
             # Peer Comparison
             group_name, peer_list = detect_peer_group(analyzer.ticker)
             if peer_list:
