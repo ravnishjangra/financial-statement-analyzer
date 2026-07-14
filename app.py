@@ -1844,6 +1844,174 @@ class AltmanZScore:
                     'components': {'X1': round(x1, 3), 'X2': round(x2, 3), 'X3': round(x3, 3), 'X4': round(x4, 3), 'X5': round(x5, 3)}}
         except Exception as e:
             return None
+        # ===== INDEX & SECTOR COMPARISON =====
+
+class IndexComparison:
+    """Compare stock vs Benchmark Index (NIFTY 50 / S&P 500)"""
+    
+    BENCHMARKS = {'INR': '^NSEI', 'USD': '^GSPC'}
+    
+    SECTOR_ETFS = {
+        'Technology': 'XLK', 'Financial Services': 'XLF', 'Healthcare': 'XLV',
+        'Consumer Cyclical': 'XLY', 'Energy': 'XLE', 'Industrials': 'XLI',
+        'Consumer Defensive': 'XLP', 'Real Estate': 'XLRE', 'Utilities': 'XLU',
+        'Basic Materials': 'XLB', 'Communication Services': 'XLC',
+    }
+    
+    INDIAN_SECTOR_INDICES = {
+        'Technology': '^CNXIT', 'Financial Services': '^CNXFIN', 'Healthcare': '^CNXPHARMA',
+        'Energy': '^CNXENERGY', 'Consumer Cyclical': '^CNXAUTO', 'Consumer Defensive': '^CNXFMCG',
+        'Basic Materials': '^CNXMETAL', 'Real Estate': '^CNXREALTY',
+    }
+    
+    @staticmethod
+    def fetch_comparison_data(ticker, currency, sector, period="1y"):
+        results = {}
+        benchmark = IndexComparison.BENCHMARKS.get(currency, '^GSPC')
+        
+        if currency == 'INR':
+            sector_indices = IndexComparison.INDIAN_SECTOR_INDICES
+        else:
+            sector_indices = IndexComparison.SECTOR_ETFS
+        
+        sector_index = sector_indices.get(sector)
+        
+        try:
+            all_tickers = [ticker, benchmark]
+            if sector_index:
+                all_tickers.append(sector_index)
+            
+            data = yf.download(all_tickers, period=period, progress=False)
+            
+            if len(all_tickers) == 3:
+                close_data = data['Close']
+                stock_prices = close_data[ticker]
+                benchmark_prices = close_data[benchmark]
+                sector_prices = close_data[sector_index]
+            else:
+                close_data = data['Close']
+                stock_prices = close_data[ticker]
+                benchmark_prices = close_data[benchmark]
+                sector_prices = None
+            
+            stock_returns = stock_prices.pct_change().dropna()
+            benchmark_returns = benchmark_prices.pct_change().dropna()
+            
+            common_dates = stock_returns.index.intersection(benchmark_returns.index)
+            stock_returns = stock_returns[common_dates]
+            benchmark_returns = benchmark_returns[common_dates]
+            
+            stock_cumulative = (1 + stock_returns).cumprod() * 100
+            benchmark_cumulative = (1 + benchmark_returns).cumprod() * 100
+            
+            covariance = stock_returns.cov(benchmark_returns)
+            variance = benchmark_returns.var()
+            beta = covariance / variance if variance and variance > 0 else 1.0
+            
+            stock_annual = stock_returns.mean() * 252
+            benchmark_annual = benchmark_returns.mean() * 252
+            alpha = stock_annual - (beta * benchmark_annual)
+            
+            tracking_error = (stock_returns - benchmark_returns).std() * np.sqrt(252)
+            info_ratio = (stock_annual - benchmark_annual) / tracking_error if tracking_error and tracking_error > 0 else 0
+            
+            stock_peak = stock_cumulative.expanding().max()
+            stock_dd = (stock_cumulative - stock_peak) / stock_peak
+            max_dd = stock_dd.min()
+            
+            correlation = stock_returns.corr(benchmark_returns)
+            
+            results = {
+                'stock_returns': stock_returns, 'benchmark_returns': benchmark_returns,
+                'stock_cumulative': stock_cumulative, 'benchmark_cumulative': benchmark_cumulative,
+                'beta': beta, 'alpha': alpha, 'tracking_error': tracking_error,
+                'information_ratio': info_ratio, 'max_drawdown': max_dd, 'correlation': correlation,
+                'stock_annual_return': stock_annual, 'benchmark_annual_return': benchmark_annual,
+                'benchmark_name': 'NIFTY 50' if currency == 'INR' else 'S&P 500',
+                'sector_prices': sector_prices,
+            }
+            
+            if sector_prices is not None:
+                sector_returns = sector_prices.pct_change().dropna()
+                common = stock_returns.index.intersection(sector_returns.index)
+                sector_returns = sector_returns[common]
+                stock_ret_aligned = stock_returns[common]
+                sector_cumulative = (1 + sector_returns).cumprod() * 100
+                sector_annual = sector_returns.mean() * 252
+                results['sector_cumulative'] = sector_cumulative
+                results['sector_annual_return'] = sector_annual
+                results['sector_relative'] = stock_annual - sector_annual
+            
+            return results
+        except Exception as e:
+            return None
+
+
+def create_index_comparison_dashboard(analyzer):
+    """Index & Sector Comparison Dashboard"""
+    st.markdown('<div class="section-header">📊 Index & Sector Comparison</div>', unsafe_allow_html=True)
+    
+    cur = analyzer.currency_symbol
+    ticker = analyzer.ticker
+    sector = analyzer.financials.get('sector', 'Unknown')
+    currency = analyzer.currency
+    benchmark_name = 'NIFTY 50' if currency == 'INR' else 'S&P 500'
+    
+    periods = {"1 Month": "1mo", "3 Months": "3mo", "6 Months": "6mo", "1 Year": "1y", "2 Years": "2y", "5 Years": "5y"}
+    selected = st.select_slider("Comparison Period", options=list(periods.keys()), value="1 Year")
+    period = periods[selected]
+    
+    if st.button(f"📊 Compare vs {benchmark_name} & Sector", type="primary", use_container_width=True):
+        with st.spinner("Fetching comparison data..."):
+            comparison = IndexComparison.fetch_comparison_data(ticker, currency, sector, period)
+        
+        if comparison is None:
+            st.error("Could not fetch comparison data. Try a different period or ticker.")
+            return
+        
+        st.markdown("### 📈 Performance Metrics")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            stock_ret = comparison['stock_annual_return'] * 100
+            bench_ret = comparison['benchmark_annual_return'] * 100
+            st.metric(f"{analyzer.company_name[:15]}", f"{stock_ret:.1f}%", delta=f"vs {benchmark_name}: {stock_ret-bench_ret:+.1f}%")
+        with col2:
+            st.metric(benchmark_name, f"{bench_ret:.1f}%")
+        with col3:
+            alpha_pct = comparison['alpha'] * 100
+            st.metric("Alpha", f"{alpha_pct:.2f}%", delta="Outperforming 📈" if alpha_pct>0 else "Underperforming 📉")
+        with col4:
+            beta_val = comparison['beta']
+            st.metric("Beta", f"{beta_val:.2f}", delta="Aggressive" if beta_val>1.1 else "Defensive" if beta_val<0.9 else "Market-like")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Correlation", f"{comparison['correlation']:.2f}")
+        col2.metric("Tracking Error", f"{comparison['tracking_error']*100:.1f}%")
+        col3.metric("Info Ratio", f"{comparison['information_ratio']:.2f}")
+        col4.metric("Max Drawdown", f"{comparison['max_drawdown']*100:.1f}%", delta_color="inverse")
+        
+        st.markdown("### 📈 Cumulative Returns (Base=100)")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=comparison['stock_cumulative'].index, y=comparison['stock_cumulative'].values,
+                                 name=analyzer.company_name[:20], line=dict(color='#667eea', width=3)))
+        fig.add_trace(go.Scatter(x=comparison['benchmark_cumulative'].index, y=comparison['benchmark_cumulative'].values,
+                                 name=benchmark_name, line=dict(color='#94a3b8', width=2, dash='dash')))
+        if 'sector_cumulative' in comparison:
+            fig.add_trace(go.Scatter(x=comparison['sector_cumulative'].index, y=comparison['sector_cumulative'].values,
+                                     name=f"{sector} Sector", line=dict(color='#10b981', width=2, dash='dot')))
+        fig.update_layout(title=f'Total Return Comparison • {selected}', template='plotly_white', height=500,
+                          hovermode='x unified', yaxis_title='Growth of $100')
+        st.plotly_chart(fig, use_container_width=True)
+        
+        alpha_val = comparison['alpha'] * 100
+        if alpha_val > 2:
+            summary = f"🟢 **{analyzer.company_name}** significantly outperforms **{benchmark_name}** (Alpha: {alpha_val:.1f}%)"
+        elif alpha_val > 0:
+            summary = f"🟡 **{analyzer.company_name}** slightly outperforms **{benchmark_name}** (Alpha: {alpha_val:.1f}%)"
+        else:
+            summary = f"🔴 **{analyzer.company_name}** underperforms **{benchmark_name}** (Alpha: {alpha_val:.1f}%)"
+        st.info(summary)
 
 
 # ===== FORMATTING =====
@@ -2190,6 +2358,7 @@ def main():
 
             create_valuation_dashboard(analyzer)
             create_advanced_scores_dashboard(analyzer)
+            create_index_comparison_dashboard(analyzer)
                 
                 
             # Peer Comparison
