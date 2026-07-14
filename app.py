@@ -1404,7 +1404,11 @@ def create_stress_test_dashboard(analyzer):
             elif 'HIGH' in str(val): return 'background-color: rgba(245,158,11,0.2); color: #f59e0b; font-weight: bold'
             elif 'POSITIVE' in str(val) or 'WINNER' in str(val): return 'background-color: rgba(16,185,129,0.2); color: #10b981; font-weight: bold'
             return ''
-        styled_df = results_df.style.applymap(color_severity, subset=['Severity']); st.dataframe(styled_df, use_container_width=True, height=600)
+        try:
+    styled_df = results_df.style.applymap(color_severity, subset=['Severity'])
+    st.dataframe(styled_df, use_container_width=True, height=600)
+except:
+    st.dataframe(results_df, use_container_width=True, height=600)
         
         severity_counts = results_df['Severity'].str.extract(r'(🔴|🟠|🟡|🟢|💀)')[0].value_counts()
         fig = go.Figure(data=[go.Pie(labels=severity_counts.index, values=severity_counts.values, hole=0.4, marker_colors=['#ef4444','#f59e0b','#eab308','#10b981','#000000'])])
@@ -1482,9 +1486,15 @@ def main():
         # ===== TAB 1 =====
     with tab1:
         c1, c2, c3 = st.columns([3, 1.5, 1])
-        with c1: ticker = st.text_input("Stock Ticker", value=st.session_state.get('current_ticker', 'AAPL'), max_chars=50, key="input_ticker")
-        with c2: exchange = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], index=["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"].index(st.session_state['current_exchange']), key="input_exchange")
-        with c3: st.write(""); analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
+        with c1: 
+            ticker = st.text_input("Stock Ticker", value=st.session_state.get('current_ticker', 'AAPL'), max_chars=50, key="input_ticker")
+        with c2: 
+            exchange = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], 
+                                    index=["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"].index(st.session_state.get('current_exchange', 'Auto-detect')), 
+                                    key="input_exchange")
+        with c3: 
+            st.write(""); 
+            analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
         st.markdown("#### ⚡ Quick Access")
         qcols = st.columns(8)
@@ -1495,6 +1505,7 @@ def main():
                     st.session_state['current_ticker'] = stock
                     st.session_state['current_exchange'] = exch
                     st.session_state['analyze_clicked'] = True
+                                        st.session_state['last_input_source'] = 'quick_access'
                     st.rerun()
 
         with st.expander("📋 More Stocks"):
@@ -1518,14 +1529,14 @@ def main():
                             st.session_state['analyze_clicked'] = True
                             st.rerun()
 
-        st.session_state['current_ticker'] = ticker
+        # Update session state from text inputs (only if not set by quick access)
+        if 'current_ticker' not in st.session_state or st.session_state.get('last_input_source') != 'quick_access':
+            st.session_state['current_ticker'] = ticker
         st.session_state['current_exchange'] = exchange
+        st.session_state['last_input_source'] = 'text_input'
+        
         if analyze_btn:
             st.session_state['analyze_clicked'] = True
-
-        if not st.session_state['analyze_clicked']:
-            st.markdown('<div style="text-align:center;padding:4rem;"><h2>🏦 Enterprise Financial Analysis Platform</h2></div>', unsafe_allow_html=True)
-        else:
             em = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
             analyzer = ProFinancialAnalyzer(st.session_state['current_ticker'], exchange=em.get(st.session_state['current_exchange'],"Auto"))
             with st.spinner("🔍 Analyzing..."): analyzer.get_live_price(); analyzer.fetch_financial_data(); analyzer.calculate_all_ratios()
