@@ -2236,6 +2236,354 @@ def create_historical_dcf_tracker(analyzer):
                           annotation_text=f"Avg: {hist['average']:.1f}%")
             fig.update_layout(title='Historical Revenue Growth Rates', template='plotly_white', height=300)
             st.plotly_chart(fig, use_container_width=True)
+            # ===== ADVANCED PORTFOLIO MODELS =====
+
+class BlackLitterman:
+    """Black-Litterman Model - Combines market equilibrium with investor views"""
+    
+    @staticmethod
+    def calculate(market_caps, cov_matrix, risk_aversion=2.5, views=None, view_confidences=None):
+        """
+        market_caps: dict of {ticker: market_cap}
+        cov_matrix: annualized covariance matrix
+        risk_aversion: market risk aversion parameter (2-3 typical)
+        views: list of dicts [{'tickers': ['AAPL'], 'return': 0.15}, {'tickers': ['MSFT','GOOGL'], 'return': 0.10}]
+        view_confidences: list of confidence levels [0.7, 0.5] (0-1 scale)
+        """
+        tickers = list(market_caps.keys())
+        n = len(tickers)
+        
+        # Step 1: Market Equilibrium Returns (Implied Returns)
+        total_mcap = sum(market_caps.values())
+        market_weights = np.array([market_caps[t] / total_mcap for t in tickers])
+        pi = risk_aversion * cov_matrix.values @ market_weights  # Implied equilibrium returns
+        
+        # Step 2: Investor Views
+        if views is None or len(views) == 0:
+            # No views = use market equilibrium
+            return {
+                'weights': dict(zip(tickers, market_weights)),
+                'expected_returns': dict(zip(tickers, pi)),
+                'method': 'Market Equilibrium (No Views)'
+            }
+        
+        # Build P matrix (views) and Q vector (expected returns from views)
+        k = len(views)
+        P = np.zeros((k, n))
+        Q = np.zeros(k)
+        
+        for i, view in enumerate(views):
+            view_tickers = view['tickers']
+            weight_per_ticker = 1.0 / len(view_tickers)
+            for t in view_tickers:
+                if t in tickers:
+                    j = tickers.index(t)
+                    P[i, j] = weight_per_ticker
+            Q[i] = view['return']
+        
+        # Step 3: Confidence Matrix (Omega)
+        tau = 0.05  # Uncertainty in prior (typically 0.01-0.05)
+        if view_confidences is None:
+            view_confidences = [0.5] * k
+        
+        Omega = np.diag([tau * (1/conf - 1) * (P @ cov_matrix.values @ P.T)[i, i] 
+                         if conf < 1 else 1e-10 
+                         for i, conf in enumerate(view_confidences)])
+        
+        # Step 4: Black-Litterman Formula
+        # E(R) = [(τΣ)^-1 + P'Ω^-1P]^-1 [(τΣ)^-1Π + P'Ω^-1Q]
+        tau_Sigma_inv = np.linalg.inv(tau * cov_matrix.values)
+        P_Omega_inv = P.T @ np.linalg.inv(Omega)
+        
+        bl_returns = np.linalg.inv(tau_Sigma_inv + P.T @ P_Omega_inv.T) @ (tau_Sigma_inv @ pi + P_Omega_inv @ Q)
+        
+        # Step 5: Optimal Weights (using BL returns)
+        inv_cov = np.linalg.inv(cov_matrix.values)
+        bl_weights = inv_cov @ bl_returns / (np.ones(n) @ inv_cov @ bl_returns)
+        bl_weights = np.maximum(bl_weights, 0)  # No short selling
+        bl_weights = bl_weights / bl_weights.sum()  # Normalize
+        
+        return {
+            'weights': dict(zip(tickers, bl_weights.round(4))),
+            'expected_returns': dict(zip(tickers, bl_returns)),
+            'equilibrium_returns': dict(zip(tickers, pi)),
+            'method': f'Black-Litterman ({k} views)'
+        }
+
+
+class RiskParity:
+    """Risk Parity Portfolio - Equal risk contribution from each asset"""
+    
+    @staticmethod
+    def calculate(cov_matrix, max_iter=1000):
+        """Calculate Risk Parity weights"""
+        tickers = list(cov_matrix.columns)
+        n = len(tickers)
+        
+        # Initial equal weights
+        weights = np.ones(n) / n
+        
+        # Risk parity optimization
+        for iteration in range(max_iter):
+            # Portfolio volatility
+            port_vol = np.sqrt(weights.T @ cov_matrix.values @ weights)
+            
+            # Marginal risk contribution
+            mrc = cov_matrix.values @ weights / port_vol
+            
+            # Risk contribution
+            rc = weights * mrc
+            
+            # Target: equal risk contribution (1/n each)
+            target_rc = port_vol / n
+            
+            # Update weights
+            weights = weights * target_rc / rc
+            weights = weights / weights.sum()
+            
+            # Check convergence
+            if np.max(np.abs(rc - target_rc)) < 1e-8:
+                break
+        
+        # Calculate risk contributions
+        port_vol = np.sqrt(weights.T @ cov_matrix.values @ weights)
+        mrc = cov_matrix.values @ weights / port_vol
+        rc = weights * mrc
+        rc_pct = rc / port_vol * 100
+        
+        return {
+            'weights': dict(zip(tickers, weights.round(4))),
+            'risk_contributions': dict(zip(tickers, rc_pct.round(1))),
+            'port_volatility': port_vol,
+            'iterations': iteration + 1
+        }
+
+
+class FactorInvesting:
+    """Fama-French Factor Analysis"""
+    
+    # Factor definitions
+    FACTORS = {
+        'Value': "High Book-to-Market minus Low",
+        'Size': "Small-cap minus Large-cap (SMB)",
+        'Momentum': "Winners minus Losers (past 12 months)",
+        'Quality': "High ROE, Low Debt minus Low ROE, High Debt",
+        'Low Volatility': "Low Beta minus High Beta",
+    }
+    
+    @staticmethod
+    def analyze_factor_exposure(info, ratios, prices_df):
+        """Analyze stock's factor exposure"""
+        exposures = {}
+        
+        # Value Factor (P/B ratio)
+        pb = ratios.get('P/B Ratio')
+        if pb:
+            if pb < 1.5:
+                exposures['Value'] = {'score': 'High', 'detail': f'P/B: {pb:.1f} (Deep Value)', 'color': '#10b981'}
+            elif pb < 3:
+                exposures['Value'] = {'score': 'Moderate', 'detail': f'P/B: {pb:.1f} (Fair Value)', 'color': '#f59e0b'}
+            else:
+                exposures['Value'] = {'score': 'Low', 'detail': f'P/B: {pb:.1f} (Growth/Expensive)', 'color': '#ef4444'}
+        
+        # Size Factor
+        mcap = info.get('marketCap', 0)
+        if mcap:
+            if mcap > 1e11:  # > $100B
+                exposures['Size'] = {'score': 'Mega Cap', 'detail': f'MCap: ${mcap/1e9:.0f}B', 'color': '#94a3b8'}
+            elif mcap > 1e10:  # > $10B
+                exposures['Size'] = {'score': 'Large Cap', 'detail': f'MCap: ${mcap/1e9:.0f}B', 'color': '#667eea'}
+            elif mcap > 2e9:
+                exposures['Size'] = {'score': 'Mid Cap', 'detail': f'MCap: ${mcap/1e9:.0f}B', 'color': '#f59e0b'}
+            else:
+                exposures['Size'] = {'score': 'Small Cap', 'detail': f'MCap: ${mcap/1e6:.0f}M', 'color': '#10b981'}
+        
+        # Momentum Factor
+        if prices_df is not None and not prices_df.empty and len(prices_df) >= 252:
+            returns_12m = (prices_df['Close'].iloc[-1] / prices_df['Close'].iloc[-252] - 1) * 100
+            if returns_12m > 30:
+                exposures['Momentum'] = {'score': 'Strong', 'detail': f'12M Return: {returns_12m:.0f}%', 'color': '#10b981'}
+            elif returns_12m > 10:
+                exposures['Momentum'] = {'score': 'Positive', 'detail': f'12M Return: {returns_12m:.0f}%', 'color': '#667eea'}
+            elif returns_12m > -10:
+                exposures['Momentum'] = {'score': 'Neutral', 'detail': f'12M Return: {returns_12m:.0f}%', 'color': '#f59e0b'}
+            else:
+                exposures['Momentum'] = {'score': 'Negative', 'detail': f'12M Return: {returns_12m:.0f}%', 'color': '#ef4444'}
+        
+        # Quality Factor (ROE + D/E)
+        roe = ratios.get('ROE')
+        de = ratios.get('Debt to Equity')
+        if roe and de:
+            quality_score = (roe / 100) - de
+            if quality_score > 0.15:
+                exposures['Quality'] = {'score': 'High', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#10b981'}
+            elif quality_score > 0.05:
+                exposures['Quality'] = {'score': 'Moderate', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#f59e0b'}
+            else:
+                exposures['Quality'] = {'score': 'Low', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#ef4444'}
+        
+        # Low Volatility Factor
+        beta = info.get('beta', 1.0) or 1.0
+        if beta < 0.7:
+            exposures['Low Vol'] = {'score': 'Very Low', 'detail': f'Beta: {beta:.2f}', 'color': '#10b981'}
+        elif beta < 1.0:
+            exposures['Low Vol'] = {'score': 'Low', 'detail': f'Beta: {beta:.2f}', 'color': '#667eea'}
+        elif beta < 1.3:
+            exposures['Low Vol'] = {'score': 'Moderate', 'detail': f'Beta: {beta:.2f}', 'color': '#f59e0b'}
+        else:
+            exposures['Low Vol'] = {'score': 'High', 'detail': f'Beta: {beta:.2f}', 'color': '#ef4444'}
+        
+        return exposures
+
+
+def create_factor_investing_dashboard(analyzer):
+    """Fama-French Factor Exposure Dashboard"""
+    st.markdown('<div class="section-header">🎯 Factor Investing (Fama-French)</div>', unsafe_allow_html=True)
+    
+    info = analyzer.financials.get('info', {})
+    ratios = analyzer.ratios
+    prices = analyzer.financials.get('prices')
+    
+    exposures = FactorInvesting.analyze_factor_exposure(info, ratios, prices)
+    
+    st.markdown("### 📊 Factor Exposure Profile")
+    st.caption("Shows how this stock scores on key Fama-French factors")
+    
+    # Display factors as cards
+    cols = st.columns(len(exposures))
+    
+    for col, (factor, data) in zip(cols, exposures.items()):
+        with col:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #1e293b, #0f172a); border: 2px solid {data['color']}; padding: 1rem; border-radius: 12px; text-align: center;">
+                <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.5rem;">{factor}</div>
+                <div style="font-size: 1.2rem; font-weight: 700; color: {data['color']};">{data['score']}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 0.3rem;">{data['detail']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.caption("💡 Factors based on Fama-French research: Value, Size, Momentum, Quality, and Low Volatility.")
+
+
+def create_advanced_portfolio_tab():
+    """Advanced Portfolio Construction Methods"""
+    st.markdown('<div class="section-header">🏦 Advanced Portfolio Construction</div>', unsafe_allow_html=True)
+    
+    st.markdown("### Select Portfolio & Method")
+    
+    presets = {
+        "Custom": [],
+        "Magnificent 7": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"],
+        "Indian IT": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"],
+        "Indian Banks": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
+    }
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        preset = st.selectbox("Preset", list(presets.keys()), key="adv_port_preset")
+    with col2:
+        default_tickers = ",".join(presets[preset]) if preset != "Custom" else "AAPL, MSFT, NVDA, AMZN, GOOGL"
+        tickers_input = st.text_input("Tickers", value=default_tickers, key="adv_port_tickers")
+    
+    # Method selection
+    method = st.radio("Portfolio Construction Method:", 
+                      ["Black-Litterman", "Risk Parity", "Maximum Sharpe (Markowitz)"],
+                      horizontal=True)
+    
+    if st.button("🚀 Construct Portfolio", type="primary", use_container_width=True):
+        tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+        
+        if len(tickers) < 2:
+            st.error("Need at least 2 tickers.")
+            return
+        
+        # Fetch data
+        with st.spinner("Fetching data..."):
+            market_caps = {}
+            prices_data = {}
+            
+            for t in tickers:
+                try:
+                    stock = yf.Ticker(t)
+                    info = stock.info
+                    market_caps[t] = info.get('marketCap', 1e9) or 1e9
+                    hist = stock.history(period="1y")
+                    if not hist.empty:
+                        prices_data[t] = hist['Close']
+                except:
+                    market_caps[t] = 1e9
+            
+            prices_df = pd.DataFrame(prices_data).dropna()
+            returns = prices_df.pct_change().dropna()
+            cov_matrix = returns.cov() * 252
+        
+        # Run selected method
+        if method == "Black-Litterman":
+            # Default views based on recent performance
+            returns_annual = returns.mean() * 252
+            top_performer = returns_annual.idxmax()
+            
+            bl = BlackLitterman.calculate(
+                market_caps, cov_matrix,
+                views=[{'tickers': [top_performer], 'return': returns_annual[top_performer]}],
+                view_confidences=[0.6]
+            )
+            
+            st.success(f"✅ Portfolio constructed using **{bl['method']}**")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**🎯 Optimal Weights**")
+                fig = go.Figure(data=[go.Pie(labels=list(bl['weights'].keys()), 
+                                             values=list(bl['weights'].values()), hole=0.4)])
+                fig.update_layout(height=350, template='plotly_white')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**📈 Expected Returns**")
+                er = bl['expected_returns']
+                returns_df = pd.DataFrame({'Ticker': list(er.keys()), 'Expected Return': [f"{v*100:.1f}%" for v in er.values()]})
+                st.dataframe(returns_df, use_container_width=True, hide_index=True)
+        
+        elif method == "Risk Parity":
+            rp = RiskParity.calculate(cov_matrix)
+            
+            st.success(f"✅ Risk Parity converged in **{rp['iterations']} iterations**")
+            st.metric("Portfolio Volatility", f"{rp['port_volatility']*100:.1f}%")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**🎯 Risk Parity Weights**")
+                fig = go.Figure(data=[go.Pie(labels=list(rp['weights'].keys()), 
+                                             values=list(rp['weights'].values()), hole=0.4)])
+                fig.update_layout(height=350, template='plotly_white')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**⚖️ Risk Contributions**")
+                rc = rp['risk_contributions']
+                rc_df = pd.DataFrame({'Ticker': list(rc.keys()), 'Risk Contribution %': [f"{v:.1f}%" for v in rc.values()]})
+                st.dataframe(rc_df, use_container_width=True, hide_index=True)
+        
+        elif method == "Maximum Sharpe (Markowitz)":
+            opt = PortfolioOptimizer(tickers)
+            opt.prices = prices_df
+            opt.daily_returns = returns
+            opt.mean_returns = returns.mean() * 252
+            opt.cov_matrix = cov_matrix
+            
+            max_sharpe = opt.optimize_sharpe()
+            st.success("✅ Maximum Sharpe Ratio Portfolio")
+            
+            st.markdown("**🎯 Optimal Weights**")
+            fig = go.Figure(data=[go.Pie(labels=list(max_sharpe['weights'].keys()), 
+                                         values=list(max_sharpe['weights'].values()), hole=0.4)])
+            fig.update_layout(height=350, template='plotly_white')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.metric("Expected Return", f"{max_sharpe['return']*100:.1f}%")
+            st.metric("Sharpe Ratio", f"{max_sharpe['sharpe']:.2f}")
+            
 
 
 # ===== FORMATTING =====
@@ -2478,7 +2826,14 @@ def main():
     if 'current_exchange' not in st.session_state: st.session_state['current_exchange'] = "Auto-detect"
     if 'analyze_clicked' not in st.session_state: st.session_state['analyze_clicked'] = False
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Stock Analysis", "🛡️ Stress Tests", "📈 Technical Analysis", "🎯 Portfolio Optimizer"])
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🔍 Stock Analysis", 
+        "🛡️ Stress Tests", 
+        "📈 Technical Analysis",
+        "🎯 Portfolio Optimizer",
+        "🏦 Advanced Portfolio"
+    ])
 
            # ===== TAB 1 =====
     with tab1:
@@ -2585,6 +2940,7 @@ def main():
             create_index_comparison_dashboard(analyzer)
             create_investment_thesis_dashboard(analyzer)
             create_historical_dcf_tracker(analyzer)
+            create_factor_investing_dashboard(analyzer)
                 
                 
             # Peer Comparison
@@ -2643,6 +2999,10 @@ def main():
     # ===== TAB 4 =====
     with tab4:
         create_portfolio_optimization_tab()
+        
+        # ===== TAB 5 =====
+    with tab5:
+        create_advanced_portfolio_tab()
 
     st.divider()
     st.caption(f"FinAnalyzer Pro | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
