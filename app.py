@@ -163,7 +163,6 @@ class ProFinancialAnalyzer:
         self.ticker = self._format_ticker(ticker.upper().strip(), exchange)
         self.stock = None
         self.financials = {}
-        self.metrics = {}
         self.ratios = {}
         self.live_price_data = {}
         self.currency = 'USD'
@@ -192,12 +191,6 @@ class ProFinancialAnalyzer:
                 'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
                 'fifty_two_week_low': info.get('fiftyTwoWeekLow'),
                 'beta': info.get('beta'),
-                'pe_ratio': info.get('trailingPE'),
-                'forward_pe': info.get('forwardPE'),
-                'peg_ratio': info.get('pegRatio'),
-                'price_to_book': info.get('priceToBook'),
-                'price_to_sales': info.get('priceToSales'),
-                'dividend_yield': info.get('dividendYield'),
                 'target_mean_price': info.get('targetMeanPrice'),
                 'recommendation': info.get('recommendationKey'),
                 'number_of_analysts': info.get('numberOfAnalystOpinions'),
@@ -205,32 +198,41 @@ class ProFinancialAnalyzer:
             self.live_price_data = {k: v for k, v in self.live_price_data.items() if v is not None}
             return True
         except Exception as e:
-            st.error(f"Error fetching live price: {str(e)}")
+            st.error(f"Error: {str(e)}")
             return False
     
     def fetch_financial_data(self):
         try:
             if not self.stock:
                 self.stock = yf.Ticker(self.ticker)
+            
             info = self.stock.info
-            if not info or len(info) < 5:
-                if not self.ticker.endswith('.NS'):
-                    self.stock = yf.Ticker(self.ticker + '.NS')
-                    self.ticker = self.ticker + '.NS'
-                    info = self.stock.info
+            
+            # Try NSE if data is sparse
+            if (not info or len(info) < 5) and not self.ticker.endswith('.NS'):
+                alt_ticker = self.ticker + '.NS'
+                self.stock = yf.Ticker(alt_ticker)
+                self.ticker = alt_ticker
+                info = self.stock.info
+            
             self.financials['info'] = info
             self.company_name = info.get('longName', self.original_ticker)
-            self.financials['sector'] = info.get('sector', 'Unknown')
-            self.financials['industry'] = info.get('industry', 'Unknown')
+            self.financials['sector'] = info.get('sector', 'N/A')
+            self.financials['industry'] = info.get('industry', 'N/A')
+            
+            # Fetch financial statements
             self.financials['income'] = self.stock.financials
             self.financials['balance'] = self.stock.balance_sheet
             self.financials['cashflow'] = self.stock.cashflow
+            
+            # Get historical prices
             end = datetime.now()
             self.financials['prices'] = self.stock.history(start=end - timedelta(days=365*3), end=end)
+            
             self._detect_currency()
             return True
         except Exception as e:
-            st.error(f"Error fetching data: {str(e)}")
+            st.error(f"Error: {str(e)}")
             return False
     
     def _detect_currency(self):
@@ -250,6 +252,7 @@ class ProFinancialAnalyzer:
         return f"{self.currency_symbol}{b:.2f}B" if abs(b) >= 1 else f"{self.currency_symbol}{value/1e6:.1f}M"
     
     def _safe_get(self, df, keys, col=0):
+        if df is None or df.empty: return None
         if isinstance(keys, str): keys = [keys]
         for key in keys:
             if key in df.index and len(df.columns) > col:
@@ -259,9 +262,13 @@ class ProFinancialAnalyzer:
     
     def calculate_all_ratios(self):
         try:
-            income = self.financials['income']
-            balance = self.financials['balance']
-            cashflow = self.financials['cashflow']
+            income = self.financials.get('income')
+            balance = self.financials.get('balance')
+            cashflow = self.financials.get('cashflow')
+            
+            if income is None or income.empty:
+                return False
+            
             prices = self.financials.get('prices')
             cp = self.live_price_data.get('current_price')
             
@@ -280,23 +287,29 @@ class ProFinancialAnalyzer:
             ni_p = self._safe_get(income, ['Net Income', 'Net Income Common Stockholders'], 1)
             if ni and ni_p and ni_p != 0: self.ratios['Net Income Growth (YoY)'] = ((ni-ni_p)/ni_p)*100
             
-            eq = self._safe_get(balance, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity'])
-            ast = self._safe_get(balance, ['Total Assets'])
-            ca = self._safe_get(balance, ['Current Assets'])
-            cl = self._safe_get(balance, ['Current Liabilities'])
-            td = self._safe_get(balance, ['Total Debt']) or self._safe_get(balance, ['Long Term Debt', 'Long-Term Debt'])
+            if balance is not None and not balance.empty:
+                eq = self._safe_get(balance, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity'])
+                ast = self._safe_get(balance, ['Total Assets'])
+                ca = self._safe_get(balance, ['Current Assets'])
+                cl = self._safe_get(balance, ['Current Liabilities'])
+                td = self._safe_get(balance, ['Total Debt']) or self._safe_get(balance, ['Long Term Debt', 'Long-Term Debt'])
+                
+                if eq:
+                    if ni: self.ratios['ROE'] = (ni/eq)*100
+                    if td: self.ratios['Debt to Equity'] = td/eq
+                if ast and ni: self.ratios['ROA'] = (ni/ast)*100
+                if ca and cl:
+                    self.ratios['Current Ratio'] = ca/cl
+                    inv = self._safe_get(balance, ['Inventory', 'Inventories'])
+                    if inv: self.ratios['Quick Ratio'] = (ca-inv)/cl
+                
+                if rev:
+                    if ast: self.ratios['Asset Turnover'] = rev/ast
+                    if eq: self.ratios['Equity Turnover'] = rev/eq
             
-            if eq:
-                if ni: self.ratios['ROE'] = (ni/eq)*100
-                if td: self.ratios['Debt to Equity'] = td/eq
-            if ast and ni: self.ratios['ROA'] = (ni/ast)*100
-            if ca and cl:
-                self.ratios['Current Ratio'] = ca/cl
-                inv = self._safe_get(balance, ['Inventory', 'Inventories'])
-                if inv: self.ratios['Quick Ratio'] = (ca-inv)/cl
-            
-            fcf = self._safe_get(cashflow, ['Free Cash Flow'])
-            if fcf and ni: self.ratios['FCF to Net Income'] = fcf/ni
+            if cashflow is not None and not cashflow.empty:
+                fcf = self._safe_get(cashflow, ['Free Cash Flow'])
+                if fcf and ni: self.ratios['FCF to Net Income'] = fcf/ni
             
             if cp:
                 shares = self._safe_get(income, ['Diluted Average Shares', 'Diluted Shares Outstanding']) or self._safe_get(income, ['Basic Average Shares', 'Basic Shares Outstanding'])
@@ -304,13 +317,15 @@ class ProFinancialAnalyzer:
                     if ni:
                         eps = ni/shares; self.ratios['EPS'] = eps
                         if eps > 0: self.ratios['P/E Ratio'] = cp/eps
-                    if eq:
+                    if 'eq' in dir() and eq:
                         bvps = eq/shares
                         if bvps > 0: self.ratios['P/B Ratio'] = cp/bvps
                     if rev and rev/shares > 0: self.ratios['P/S Ratio'] = cp/(rev/shares)
-                    if fcf and fcf/shares > 0: self.ratios['P/FCF Ratio'] = cp/(fcf/shares)
-                    div = self._safe_get(cashflow, ['Dividends Paid'])
-                    if div and cp > 0: self.ratios['Dividend Yield'] = (abs(div)/shares/cp)*100
+                    if 'fcf' in dir() and fcf and fcf/shares > 0: self.ratios['P/FCF Ratio'] = cp/(fcf/shares)
+                    if cashflow is not None and not cashflow.empty:
+                        div = self._safe_get(cashflow, ['Dividends Paid'])
+                        if div and cp > 0: self.ratios['Dividend Yield'] = (abs(div)/shares/cp)*100
+                
                 eg = self.ratios.get('Net Income Growth (YoY)')
                 pe = self.ratios.get('P/E Ratio')
                 if eg and pe and eg > 0: self.ratios['PEG Ratio'] = pe/eg
@@ -318,11 +333,6 @@ class ProFinancialAnalyzer:
             if prices is not None and not prices.empty and len(prices) >= 252:
                 self.ratios['52-Week Return'] = ((prices['Close'].iloc[-1]-prices['Close'].iloc[-252])/prices['Close'].iloc[-252])*100
             
-            if rev:
-                if ast: self.ratios['Asset Turnover'] = rev/ast
-                if eq: self.ratios['Equity Turnover'] = rev/eq
-            
-            self.metrics = self.ratios.copy()
             return True
         except Exception as e:
             st.error(f"Error calculating ratios: {str(e)}")
@@ -332,37 +342,27 @@ class ProFinancialAnalyzer:
 # ===== FORMATTING HELPERS =====
 
 def format_financial_number(value, symbol, currency):
-    """Format a single financial number with proper currency formatting"""
-    if pd.isna(value) or value is None:
-        return 'N/A'
-    value = float(value)
-    abs_val = abs(value)
-    sign = '-' if value < 0 else ''
-    
-    if currency == 'INR':
-        if abs_val >= 1e7:
-            return f"{sign}{symbol}{abs_val/1e7:,.2f} Cr"
-        elif abs_val >= 1e5:
-            return f"{sign}{symbol}{abs_val/1e5:,.2f} L"
-        elif abs_val >= 1e3:
-            return f"{sign}{symbol}{abs_val/1e3:,.0f}K"
+    if pd.isna(value) or value is None: return 'N/A'
+    try:
+        value = float(value)
+        abs_val = abs(value)
+        sign = '-' if value < 0 else ''
+        if currency == 'INR':
+            if abs_val >= 1e7: return f"{sign}{symbol}{abs_val/1e7:,.2f} Cr"
+            elif abs_val >= 1e5: return f"{sign}{symbol}{abs_val/1e5:,.2f} L"
+            elif abs_val >= 1e3: return f"{sign}{symbol}{abs_val/1e3:,.0f}K"
+            else: return f"{sign}{symbol}{abs_val:,.0f}"
         else:
-            return f"{sign}{symbol}{abs_val:,.0f}"
-    else:
-        if abs_val >= 1e9:
-            return f"{sign}{symbol}{abs_val/1e9:,.2f}B"
-        elif abs_val >= 1e6:
-            return f"{sign}{symbol}{abs_val/1e6:,.2f}M"
-        elif abs_val >= 1e3:
-            return f"{sign}{symbol}{abs_val/1e3:,.0f}K"
-        else:
-            return f"{sign}{symbol}{abs_val:,.0f}"
+            if abs_val >= 1e9: return f"{sign}{symbol}{abs_val/1e9:,.2f}B"
+            elif abs_val >= 1e6: return f"{sign}{symbol}{abs_val/1e6:,.2f}M"
+            elif abs_val >= 1e3: return f"{sign}{symbol}{abs_val/1e3:,.0f}K"
+            else: return f"{sign}{symbol}{abs_val:,.0f}"
+    except:
+        return str(value)
 
 
 def format_financial_df(df, currency_symbol, currency):
-    """Format entire financial dataframe"""
-    if df is None or df.empty:
-        return None
+    if df is None or df.empty: return None
     formatted_df = df.copy()
     for col in formatted_df.columns:
         formatted_df[col] = formatted_df[col].apply(lambda x: format_financial_number(x, currency_symbol, currency))
@@ -371,53 +371,61 @@ def format_financial_df(df, currency_symbol, currency):
 
 # ===== PEER COMPARISON =====
 
-def get_peer_comparison(main_ticker, peer_tickers, currency_symbol='$', currency='USD'):
-    """Fetch and compare metrics for peer companies with proper currency"""
+def get_peer_comparison(main_ticker, peer_tickers):
     peer_data = []
-    
     for ticker in peer_tickers:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
+            if not info: continue
             
-            # Detect if this peer is Indian
             is_indian = ticker.endswith('.NS') or ticker.endswith('.BO')
-            peer_currency = 'INR' if is_indian else (info.get('currency', 'USD'))
+            peer_currency = 'INR' if is_indian else info.get('currency', 'USD')
+            market_cap = info.get('marketCap', 0) or 0
             
-            # Format market cap based on currency
-            market_cap = info.get('marketCap', 0)
             if peer_currency == 'INR':
-                market_cap_display = round(market_cap / 1e7, 2)
-                market_cap_label = 'Market Cap (₹ Cr)'
+                mcap_display = round(market_cap / 1e7, 2)
+                mcap_label = 'Market Cap (₹ Cr)'
             else:
-                market_cap_display = round(market_cap / 1e9, 2)
-                market_cap_label = 'Market Cap ($ B)'
+                mcap_display = round(market_cap / 1e9, 2)
+                mcap_label = 'Market Cap ($ B)'
+            
+            pe = info.get('trailingPE')
+            fpe = info.get('forwardPE')
+            pb = info.get('priceToBook')
+            rg = info.get('revenueGrowth')
+            pm = info.get('profitMargins')
+            roe = info.get('returnOnEquity')
+            de = info.get('debtToEquity')
+            dy = info.get('dividendYield')
             
             peer_data.append({
                 'Ticker': ticker.replace('.NS', '').replace('.BO', ''),
                 'Company': info.get('longName', ticker)[:25],
-                market_cap_label: market_cap_display,
-                'P/E Ratio': round(info.get('trailingPE', 0), 2) if info.get('trailingPE') else None,
-                'Forward P/E': round(info.get('forwardPE', 0), 2) if info.get('forwardPE') else None,
-                'P/B Ratio': round(info.get('priceToBook', 0), 2) if info.get('priceToBook') else None,
-                'Revenue Growth': round(info.get('revenueGrowth', 0) * 100, 2) if info.get('revenueGrowth') else None,
-                'Profit Margin': round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None,
-                'ROE': round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None,
-                'Debt/Equity': round(info.get('debtToEquity', 0), 2) if info.get('debtToEquity') else None,
-                'Dividend Yield': round(info.get('dividendYield', 0) * 100, 2) if info.get('dividendYield') else None,
+                mcap_label: mcap_display,
+                'P/E Ratio': round(pe, 2) if pe else None,
+                'Forward P/E': round(fpe, 2) if fpe else None,
+                'P/B Ratio': round(pb, 2) if pb else None,
+                'Revenue Growth': round(rg*100, 2) if rg else None,
+                'Profit Margin': round(pm*100, 2) if pm else None,
+                'ROE': round(roe*100, 2) if roe else None,
+                'Debt/Equity': round(de, 2) if de else None,
+                'Dividend Yield': round(dy*100, 2) if dy else None,
                 'Current Price': info.get('currentPrice') or info.get('regularMarketPrice'),
-                'Currency': peer_currency,
                 'Recommendation': info.get('recommendationKey', 'N/A'),
             })
         except:
             continue
-    
     return pd.DataFrame(peer_data)
 
 
+def safe_mean(series):
+    """Calculate mean safely"""
+    valid = series.dropna()
+    return valid.mean() if len(valid) > 0 else None
+
+
 def create_peer_comparison_charts(peer_df, main_ticker_name, currency_symbol, currency):
-    """Create peer comparison visualizations with proper currency"""
-    
     st.markdown("---")
     st.markdown("## 🏢 Peer Comparison")
     
@@ -427,17 +435,14 @@ def create_peer_comparison_charts(peer_df, main_ticker_name, currency_symbol, cu
     
     main_ticker_clean = main_ticker_name.replace('.NS', '').replace('.BO', '')
     
-    # Detect market cap column
     mcap_col = [col for col in peer_df.columns if 'Market Cap' in col]
     mcap_col = mcap_col[0] if mcap_col else 'Market Cap ($ B)'
     
-    # === 1. Market Cap Comparison ===
+    # Market Cap Chart
     st.markdown("### 📊 Market Capitalization Comparison")
-    
     sorted_df = peer_df.sort_values(mcap_col, ascending=True)
-    colors = ['#ff4444' if ticker == main_ticker_clean else '#1f77b4' for ticker in sorted_df['Ticker']]
+    colors = ['#ff4444' if t == main_ticker_clean else '#1f77b4' for t in sorted_df['Ticker']]
     
-    # Determine unit
     if '₹' in mcap_col or 'Cr' in mcap_col:
         unit, curr_sign = 'Cr', '₹'
     else:
@@ -447,134 +452,120 @@ def create_peer_comparison_charts(peer_df, main_ticker_name, currency_symbol, cu
     fig.add_trace(go.Bar(
         y=sorted_df['Ticker'], x=sorted_df[mcap_col],
         orientation='h', marker_color=colors,
-        text=[f"{curr_sign}{v:.1f}{unit}" if v > 0 else 'N/A' for v in sorted_df[mcap_col]],
+        text=[f"{curr_sign}{v:.1f}{unit}" if pd.notna(v) and v > 0 else 'N/A' for v in sorted_df[mcap_col]],
         textposition='outside'
     ))
-    fig.update_layout(title=f'Market Cap Comparison ({mcap_col})', height=400, template='plotly_white', showlegend=False)
+    fig.update_layout(title=f'Market Cap ({mcap_col})', height=400, template='plotly_white', showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
     
-    # === 2. Valuation Metrics ===
-    st.markdown("### 📈 Valuation Metrics Comparison")
-    
+    # Key Metrics
+    st.markdown("### 📈 Key Metrics Comparison")
     metrics_to_plot = ['P/E Ratio', 'P/B Ratio', 'Revenue Growth', 'ROE']
-    available_metrics = [m for m in metrics_to_plot if m in peer_df.columns and peer_df[m].notna().any()]
+    available = [m for m in metrics_to_plot if m in peer_df.columns and peer_df[m].notna().any()]
     
-    if available_metrics:
-        fig = make_subplots(rows=2, cols=2, subplot_titles=available_metrics[:4], vertical_spacing=0.15)
+    if available:
+        fig = make_subplots(rows=2, cols=2, subplot_titles=available[:4], vertical_spacing=0.15)
         positions = [(1,1), (1,2), (2,1), (2,2)]
-        
-        for i, metric in enumerate(available_metrics[:4]):
+        for i, metric in enumerate(available[:4]):
             row, col = positions[i]
-            valid_data = peer_df[peer_df[metric].notna()]
-            colors = ['#ff4444' if ticker == main_ticker_clean else '#1f77b4' for ticker in valid_data['Ticker']]
-            fig.add_trace(go.Bar(x=valid_data['Ticker'], y=valid_data[metric], marker_color=colors, text=[f"{v:.1f}" for v in valid_data[metric]], textposition='outside'), row=row, col=col)
-        
-        fig.update_layout(height=600, template='plotly_white', showlegend=False, title_text="Peer Comparison - Key Metrics")
+            valid = peer_df[peer_df[metric].notna()]
+            colors = ['#ff4444' if t == main_ticker_clean else '#1f77b4' for t in valid['Ticker']]
+            fig.add_trace(go.Bar(x=valid['Ticker'], y=valid[metric], marker_color=colors, text=[f"{v:.1f}" if pd.notna(v) else 'N/A' for v in valid[metric]], textposition='outside'), row=row, col=col)
+        fig.update_layout(height=600, template='plotly_white', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
     
-    # === 3. Detailed Table ===
-    st.markdown("### 📋 Detailed Peer Comparison Table")
-    
+    # Detailed Table
+    st.markdown("### 📋 Detailed Comparison")
     def highlight_main(row):
         return ['background-color: #fff3cd'] * len(row) if row['Ticker'] == main_ticker_clean else [''] * len(row)
-    
     display_df = peer_df.copy()
-    if 'Currency' in display_df.columns:
-        display_df = display_df.drop('Currency', axis=1)
     for col in display_df.columns:
         if display_df[col].dtype in ['float64', 'int64']:
-            display_df[col] = display_df[col].round(2)
-    
+            display_df[col] = display_df[col].apply(lambda x: round(x, 2) if pd.notna(x) else x)
     st.dataframe(display_df.style.apply(highlight_main, axis=1), use_container_width=True, height=400)
     
-    # === 4. Summary Stats ===
+    # Summary Stats
     st.markdown("### 📊 Peer Group Summary")
-    other_peers = peer_df[peer_df['Ticker'] != main_ticker_clean]
+    other = peer_df[peer_df['Ticker'] != main_ticker_clean]
     
     c1, c2, c3, c4 = st.columns(4)
+    
     main_pe = peer_df[peer_df['Ticker'] == main_ticker_clean]['P/E Ratio'].values
+    avg_pe = safe_mean(other['P/E Ratio'])
+    c1.metric("Avg Peer P/E", f"{avg_pe:.1f}" if avg_pe else "N/A", delta=f"{main_pe[0]:.1f} (You)" if len(main_pe)>0 and pd.notna(main_pe[0]) else None)
+    
     main_roe = peer_df[peer_df['Ticker'] == main_ticker_clean]['ROE'].values
+    avg_roe = safe_mean(other['ROE'])
+    c2.metric("Avg Peer ROE", f"{avg_roe:.1f}%" if avg_roe else "N/A", delta=f"{main_roe[0]:.1f}% (You)" if len(main_roe)>0 and pd.notna(main_roe[0]) else None)
+    
     main_growth = peer_df[peer_df['Ticker'] == main_ticker_clean]['Revenue Growth'].values
+    avg_growth = safe_mean(other['Revenue Growth'])
+    c3.metric("Avg Peer Growth", f"{avg_growth:.1f}%" if avg_growth else "N/A", delta=f"{main_growth[0]:.1f}% (You)" if len(main_growth)>0 and pd.notna(main_growth[0]) else None)
+    
     main_de = peer_df[peer_df['Ticker'] == main_ticker_clean]['Debt/Equity'].values
+    avg_de = safe_mean(other['Debt/Equity'])
+    c4.metric("Avg Peer D/E", f"{avg_de:.1f}" if avg_de else "N/A", delta=f"{main_de[0]:.1f} (You)" if len(main_de)>0 and pd.notna(main_de[0]) else None, delta_color="inverse")
     
-    c1.metric("Avg Peer P/E", f"{other_peers['P/E Ratio'].mean():.1f}" if pd.notna(other_peers['P/E Ratio'].mean()) else "N/A", delta=f"{main_pe[0]:.1f} (You)" if len(main_pe)>0 else None)
-    c2.metric("Avg Peer ROE", f"{other_peers['ROE'].mean():.1f}%" if pd.notna(other_peers['ROE'].mean()) else "N/A", delta=f"{main_roe[0]:.1f}% (You)" if len(main_roe)>0 else None)
-    c3.metric("Avg Peer Growth", f"{other_peers['Revenue Growth'].mean():.1f}%" if pd.notna(other_peers['Revenue Growth'].mean()) else "N/A", delta=f"{main_growth[0]:.1f}% (You)" if len(main_growth)>0 else None)
-    c4.metric("Avg Peer D/E", f"{other_peers['Debt/Equity'].mean():.1f}" if pd.notna(other_peers['Debt/Equity'].mean()) else "N/A", delta=f"{main_de[0]:.1f} (You)" if len(main_de)>0 else None, delta_color="inverse")
-    
-    # === 5. Recommendations ===
+    # Recommendations
     st.markdown("### 🎯 Analyst Recommendations")
     rec_counts = peer_df['Recommendation'].value_counts()
-    fig = go.Figure(data=[go.Pie(labels=rec_counts.index, values=rec_counts.values, hole=0.4, marker_colors=['#00ff88', '#88ff00', '#ffa500', '#ff4444', '#ff0000'])])
-    fig.update_layout(title='Peer Group - Analyst Consensus', height=350, template='plotly_white')
-    st.plotly_chart(fig, use_container_width=True)
+    if len(rec_counts) > 0:
+        fig = go.Figure(data=[go.Pie(labels=rec_counts.index, values=rec_counts.values, hole=0.4, marker_colors=['#00ff88', '#88ff00', '#ffa500', '#ff4444', '#ff0000'])])
+        fig.update_layout(height=350, template='plotly_white')
+        st.plotly_chart(fig, use_container_width=True)
 
 
 # ===== DASHBOARD COMPONENTS =====
 
 def create_live_price_dashboard(analyzer):
-    price_data = analyzer.live_price_data
-    currency = analyzer.currency_symbol
+    pd_data = analyzer.live_price_data
+    cur = analyzer.currency_symbol
     
     st.markdown("### 🟢 Live Market Data")
     
-    current_price = price_data.get('current_price')
-    prev_close = price_data.get('previous_close')
+    cp = pd_data.get('current_price')
+    pc = pd_data.get('previous_close')
     
-    if current_price and prev_close:
-        change = current_price - prev_close
-        change_pct = (change / prev_close) * 100
+    if cp and pc:
+        change = cp - pc
+        change_pct = (change/pc)*100
         color = "price-up" if change >= 0 else "price-down"
         arrow = "▲" if change >= 0 else "▼"
-        
-        st.markdown(f"""
-        <div class="live-price-box">
-            <h3>{analyzer.company_name}</h3>
-            <div class="{color}">{currency}{current_price:.2f} {arrow}</div>
-            <div style="font-size: 1.2rem; margin-top: 0.5rem;">{currency}{abs(change):.2f} ({change_pct:+.2f}%)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="live-price-box"><h3>{analyzer.company_name}</h3><div class="{color}">{cur}{cp:.2f} {arrow}</div><div style="font-size:1.2rem;margin-top:0.5rem;">{cur}{abs(change):.2f} ({change_pct:+.2f}%)</div></div>', unsafe_allow_html=True)
     
-    col1, col2, col3, col4 = st.columns(4)
-    for col, (label, value) in zip([col1, col2, col3, col4], [
-        ("Open", f"{currency}{price_data.get('open', 0):.2f}"),
-        ("Day High", f"{currency}{price_data.get('day_high', 0):.2f}"),
-        ("Day Low", f"{currency}{price_data.get('day_low', 0):.2f}"),
-        ("Volume", f"{price_data.get('volume', 0):,.0f}"),
-    ]): col.metric(label, value)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Open", f"{cur}{pd_data.get('open', 0):.2f}")
+    c2.metric("Day High", f"{cur}{pd_data.get('day_high', 0):.2f}")
+    c3.metric("Day Low", f"{cur}{pd_data.get('day_low', 0):.2f}")
+    c4.metric("Volume", f"{pd_data.get('volume', 0):,.0f}")
     
-    col1, col2, col3, col4 = st.columns(4)
-    for col, (label, value) in zip([col1, col2, col3, col4], [
-        ("52-Week High", f"{currency}{price_data.get('fifty_two_week_high', 0):.2f}"),
-        ("52-Week Low", f"{currency}{price_data.get('fifty_two_week_low', 0):.2f}"),
-        ("Market Cap", analyzer._format_amount(price_data.get('market_cap', 0))),
-        ("Beta", f"{price_data.get('beta', 0):.2f}"),
-    ]): col.metric(label, value)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("52W High", f"{cur}{pd_data.get('fifty_two_week_high', 0):.2f}")
+    c2.metric("52W Low", f"{cur}{pd_data.get('fifty_two_week_low', 0):.2f}")
+    c3.metric("Market Cap", analyzer._format_amount(pd_data.get('market_cap', 0)))
+    c4.metric("Beta", f"{pd_data.get('beta', 0):.2f}")
 
 
 def create_ratio_dashboard(ratios, currency_symbol):
     st.markdown("### 📊 Financial Ratios Dashboard")
-    
     categories = {
-        '📈 Valuation Ratios': {'P/E Ratio': 'Price to Earnings', 'P/B Ratio': 'Price to Book', 'P/S Ratio': 'Price to Sales', 'P/FCF Ratio': 'Price to Free Cash Flow', 'PEG Ratio': 'Price/Earnings to Growth', 'Dividend Yield': 'Dividend Yield %'},
-        '💰 Profitability Ratios': {'Net Profit Margin': 'Net Margin %', 'Gross Profit Margin': 'Gross Margin %', 'Operating Margin': 'Operating Margin %', 'ROE': 'Return on Equity %', 'ROA': 'Return on Assets %'},
-        '📊 Growth Metrics': {'Revenue Growth (YoY)': 'Revenue Growth %', 'Net Income Growth (YoY)': 'Earnings Growth %', '52-Week Return': '52-Week Return %', 'EPS': 'Earnings Per Share'},
-        '🏦 Financial Health': {'Current Ratio': 'Liquidity Ratio', 'Quick Ratio': 'Quick Ratio', 'Debt to Equity': 'Leverage Ratio', 'Asset Turnover': 'Asset Efficiency'},
+        '📈 Valuation': {'P/E Ratio': 'P/E', 'P/B Ratio': 'P/B', 'P/S Ratio': 'P/S', 'P/FCF Ratio': 'P/FCF', 'PEG Ratio': 'PEG', 'Dividend Yield': 'Div Yield'},
+        '💰 Profitability': {'Net Profit Margin': 'Net Margin', 'Gross Profit Margin': 'Gross Margin', 'Operating Margin': 'Op Margin', 'ROE': 'ROE', 'ROA': 'ROA'},
+        '📊 Growth': {'Revenue Growth (YoY)': 'Rev Growth', 'Net Income Growth (YoY)': 'Earn Growth', '52-Week Return': '52W Return', 'EPS': 'EPS'},
+        '🏦 Health': {'Current Ratio': 'Curr Ratio', 'Quick Ratio': 'Quick Ratio', 'Debt to Equity': 'D/E', 'Asset Turnover': 'Asset Turn'},
     }
-    
     for category, metrics in categories.items():
-        available_metrics = {k: v for k, v in ratios.items() if k in metrics}
-        if available_metrics:
-            st.markdown(f"#### {category}")
-            cols = st.columns(min(len(available_metrics), 4))
-            for i, (name, value) in enumerate(available_metrics.items()):
+        available = {k: v for k, v in ratios.items() if k in metrics}
+        if available:
+            st.markdown(f"**{category}**")
+            cols = st.columns(min(len(available), 4))
+            for i, (name, value) in enumerate(available.items()):
                 with cols[i % 4]:
                     if isinstance(value, (int, float)):
                         if 'Ratio' in name and 'P/E' not in name and 'PEG' not in name: display = f"{value:.2f}"
                         elif 'Margin' in name or 'Growth' in name or 'Yield' in name or 'ROE' in name or 'ROA' in name or 'Return' in name: display = f"{value:.2f}%"
                         elif 'per Share' in name: display = f"{currency_symbol}{value:.2f}"
                         else: display = f"{value:.2f}"
-                        
                         card_class = "valuation-card" if 'Valuation' in category else "profitability-card" if 'Profitability' in category else "growth-card" if 'Growth' in category else "metric-card"
                         st.markdown(f'<div class="{card_class}"><div class="metric-value">{display}</div><div class="metric-label">{metrics[name]}</div></div>', unsafe_allow_html=True)
             st.markdown("<br>", unsafe_allow_html=True)
@@ -583,25 +574,19 @@ def create_ratio_dashboard(ratios, currency_symbol):
 def create_advanced_charts(analyzer):
     financials = analyzer.financials
     currency = analyzer.currency_symbol
-    
     st.markdown("### 📉 Advanced Charts")
     
     prices = financials.get('prices')
     if prices is not None and not prices.empty:
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], subplot_titles=('Price & Moving Averages', 'Volume'))
-        
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=prices.index, open=prices['Open'], high=prices['High'], low=prices['Low'], close=prices['Close'], name='Price'), row=1, col=1)
         for ma, color, name in [(20, 'orange', '20 MA'), (50, 'blue', '50 MA'), (200, 'red', '200 MA')]:
-            fig.add_trace(go.Scatter(x=prices.index, y=prices['Close'].rolling(window=ma).mean(), name=f'{name}', line=dict(color=color, width=1)), row=1, col=1)
-        
-        colors = ['green' if prices['Close'].iloc[i] >= prices['Open'].iloc[i] else 'red' for i in range(len(prices))]
-        fig.add_trace(go.Bar(x=prices.index, y=prices['Volume'], name='Volume', marker_color=colors), row=2, col=1)
-        fig.update_layout(height=600, template='plotly_white', xaxis_rangeslider_visible=False, hovermode='x unified')
-        fig.update_yaxes(title_text=f"Price ({currency})", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=2, col=1)
+            fig.add_trace(go.Scatter(x=prices.index, y=prices['Close'].rolling(window=ma).mean(), name=name, line=dict(color=color, width=1)), row=1, col=1)
+        vol_colors = ['green' if prices['Close'].iloc[i] >= prices['Open'].iloc[i] else 'red' for i in range(len(prices))]
+        fig.add_trace(go.Bar(x=prices.index, y=prices['Volume'], name='Volume', marker_color=vol_colors), row=2, col=1)
+        fig.update_layout(height=600, template='plotly_white', xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
     
-    # Returns Distribution
     if prices is not None and not prices.empty:
         returns = prices['Close'].pct_change().dropna() * 100
         fig = go.Figure()
@@ -610,10 +595,8 @@ def create_advanced_charts(analyzer):
             mean_r, std_r = returns.mean(), returns.std()
             x_range = np.linspace(returns.min(), returns.max(), 100)
             fig.add_trace(go.Scatter(x=x_range, y=(1/(std_r*np.sqrt(2*np.pi)))*np.exp(-(x_range-mean_r)**2/(2*std_r**2)), name='Normal', line=dict(color='red', width=2)))
-        fig.add_vline(x=returns.mean(), line_dash="dash", line_color="green", annotation_text=f"Mean: {returns.mean():.2f}%")
-        fig.update_layout(title='Daily Returns Distribution', template='plotly_white', height=400)
+        fig.update_layout(height=400, template='plotly_white')
         st.plotly_chart(fig, use_container_width=True)
-        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Mean Return", f"{returns.mean():.3f}%")
         c2.metric("Volatility", f"{returns.std():.3f}%")
@@ -628,144 +611,114 @@ def detect_peer_group(ticker):
     return None, []
 
 
-# ===== MAIN APP =====
+# ===== MAIN =====
 
 def main():
     st.markdown('<h1 class="main-header">📊 Financial Statement Analyzer Pro</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Live Prices • Peer Comparison • 20+ Ratios • Advanced Charts</p>', unsafe_allow_html=True)
     
     with st.sidebar:
-        st.header("🔍 Search & Settings")
-        ticker = st.text_input("Enter Stock Ticker:", "AAPL", max_chars=50)
+        st.header("🔍 Search")
+        ticker = st.text_input("Stock Ticker:", "AAPL", max_chars=50)
         exchange = st.selectbox("Exchange:", ["Auto-detect", "NSE India (.NS)", "BSE India (.BO)", "US Market"])
         exchange_map = {"NSE India (.NS)": "NSE", "BSE India (.BO)": "BSE", "US Market": None, "Auto-detect": None}
         
         st.divider()
         st.subheader("🏢 Peer Comparison")
-        use_peer_comparison = st.checkbox("Enable Peer Comparison", value=True)
-        custom_peers = st.text_input("Add custom peers:", placeholder="e.g., AAPL, MSFT, GOOGL")
-        auto_refresh = st.checkbox("Auto-refresh (30s)")
-        analyze_btn = st.button("🔍 Analyze Company", type="primary", use_container_width=True)
+        use_peers = st.checkbox("Enable Peer Comparison", value=True)
+        custom_peers = st.text_input("Custom Peers:", placeholder="AAPL, MSFT, GOOGL")
+        analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
         
         st.divider()
-        tab1, tab2 = st.tabs(["Indian Stocks", "US Stocks"])
-        with tab1:
-            for tick in list(INDIAN_STOCKS_DB.keys())[:15]:
+        t1, t2 = st.tabs(["India", "US"])
+        with t1:
+            for tick in list(INDIAN_STOCKS_DB.keys())[:12]:
                 if st.button(tick, use_container_width=True, key=f"i_{tick}"):
                     st.session_state['ticker'] = tick; st.rerun()
-        with tab2:
-            for stock in ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "META", "NVDA", "JPM"]:
-                if st.button(stock, use_container_width=True, key=f"u_{stock}"):
-                    st.session_state['ticker'] = stock; st.rerun()
+        with t2:
+            for s in ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "META", "NVDA", "JPM"]:
+                if st.button(s, use_container_width=True, key=f"u_{s}"):
+                    st.session_state['ticker'] = s; st.rerun()
     
     if 'ticker' in st.session_state:
         ticker = st.session_state['ticker']
     
     if not analyze_btn and 'ticker' not in st.session_state:
-        st.markdown("""
-        <div style="text-align:center; padding:3rem;">
-            <h2>🚀 Financial Statement Analyzer Pro</h2>
-            <p>Live Prices • Peer Comparison • 20+ Ratios • Advanced Charts • Multi-Currency</p>
-            <p>👈 Enter a ticker in the sidebar to begin!</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div style="text-align:center;padding:3rem;"><h2>🚀 FinAnalyzer Pro</h2><p>Enter a ticker to analyze!</p></div>', unsafe_allow_html=True)
         return
     
-    selected_exchange = exchange_map.get(exchange)
-    analyzer = ProFinancialAnalyzer(ticker, exchange=selected_exchange)
+    analyzer = ProFinancialAnalyzer(ticker, exchange=exchange_map.get(exchange))
     
     pb = st.progress(0)
     st_msg = st.empty()
     
-    for i, (msg, prog) in enumerate([("Fetching live data...", 25), ("Downloading financials...", 50), ("Calculating ratios...", 75), ("Rendering...", 100)]):
-        st_msg.text(msg); pb.progress(prog)
-        if i == 0: analyzer.get_live_price()
-        elif i == 1:
-            if not analyzer.fetch_financial_data():
-                pb.empty(); st_msg.empty(); st.error("Unable to fetch data."); return
-        elif i == 2: analyzer.calculate_all_ratios()
+    st_msg.text("Fetching data..."); pb.progress(25)
+    analyzer.get_live_price()
     
-    time.sleep(0.3)
+    st_msg.text("Downloading financials..."); pb.progress(50)
+    if not analyzer.fetch_financial_data():
+        pb.empty(); st_msg.empty(); st.error("Unable to fetch data. Try another ticker."); return
+    
+    st_msg.text("Calculating ratios..."); pb.progress(75)
+    analyzer.calculate_all_ratios()
+    
+    pb.progress(100); time.sleep(0.3)
     pb.empty(); st_msg.empty()
     
     # Display
     create_live_price_dashboard(analyzer)
-    if auto_refresh: time.sleep(30); st.rerun()
     
-    # Analyst
     if analyzer.live_price_data.get('recommendation'):
         rec = analyzer.live_price_data.get('recommendation', '').upper()
-        rec_color = {'BUY': '#00ff88', 'STRONG_BUY': '#00ff88', 'HOLD': '#ffa500', 'SELL': '#ff4444', 'STRONG_SELL': '#ff4444'}.get(rec, '#666')
-        st.markdown(f'<div style="background-color:{rec_color};padding:1rem;border-radius:10px;color:white;text-align:center;"><h3>{rec.replace("_"," ")}</h3><p>{analyzer.live_price_data.get("number_of_analysts","N/A")} analysts</p></div>', unsafe_allow_html=True)
+        rc = {'BUY': '#00ff88', 'STRONG_BUY': '#00ff88', 'HOLD': '#ffa500', 'SELL': '#ff4444', 'STRONG_SELL': '#ff4444'}.get(rec, '#666')
+        st.markdown(f'<div style="background-color:{rc};padding:1rem;border-radius:10px;color:white;text-align:center;"><h3>{rec.replace("_"," ")}</h3><p>{analyzer.live_price_data.get("number_of_analysts","N/A")} analysts</p></div>', unsafe_allow_html=True)
     
-    # Info
     st.markdown(f'<div class="info-box"><strong>{analyzer.company_name}</strong> | {analyzer.financials.get("sector","N/A")} | {analyzer.financials.get("industry","N/A")} | {analyzer.currency} ({analyzer.currency_symbol})</div>', unsafe_allow_html=True)
     
-    # Ratios
     create_ratio_dashboard(analyzer.ratios, analyzer.currency_symbol)
-    
-    # Charts
     create_advanced_charts(analyzer)
     
     # Peer Comparison
-    if use_peer_comparison:
+    if use_peers:
         if custom_peers:
             peer_list = [p.strip().upper() for p in custom_peers.split(',') if p.strip()]
         else:
             group_name, peer_list = detect_peer_group(analyzer.ticker)
-            if group_name: st.info(f"🔍 Auto-detected: **{group_name.replace('_',' ')}**")
-            else: st.warning("No auto peer group found. Add custom peers.")
+            if group_name: st.info(f"🔍 Peer group: **{group_name.replace('_',' ')}**")
+            else: st.warning("No auto peer group. Add custom peers.")
         
         peer_list = [p for p in peer_list if p != analyzer.ticker]
         all_tickers = [analyzer.ticker] + peer_list[:7]
         
         if len(all_tickers) >= 2:
             with st.spinner("Fetching peer data..."):
-                peer_df = get_peer_comparison(analyzer.ticker, all_tickers, analyzer.currency_symbol, analyzer.currency)
-                create_peer_comparison_charts(peer_df, analyzer.ticker, analyzer.currency_symbol, analyzer.currency)
+                peer_df = get_peer_comparison(analyzer.ticker, all_tickers)
+                if not peer_df.empty:
+                    create_peer_comparison_charts(peer_df, analyzer.ticker, analyzer.currency_symbol, analyzer.currency)
     
-    # Financial Statements (FORMATTED)
+    # Financial Statements
     st.markdown("---")
     st.markdown("### 📋 Financial Statements")
     st.caption(f"All amounts in {analyzer.currency} ({analyzer.currency_symbol})")
     
     tab1, tab2, tab3 = st.tabs(["📊 Income Statement", "💰 Balance Sheet", "💵 Cash Flow"])
     
-    with tab1:
-        income_df = analyzer.financials.get('income')
-        if income_df is not None and not income_df.empty:
-            formatted_income = format_financial_df(income_df, analyzer.currency_symbol, analyzer.currency)
-            st.dataframe(formatted_income, use_container_width=True)
-            with st.expander("📥 Download / View Raw Data"):
-                csv = income_df.to_csv()
-                st.download_button("📥 Download CSV", csv, f"{analyzer.original_ticker}_income.csv", "text/csv")
-        else:
-            st.warning("Income Statement not available.")
-    
-    with tab2:
-        balance_df = analyzer.financials.get('balance')
-        if balance_df is not None and not balance_df.empty:
-            formatted_balance = format_financial_df(balance_df, analyzer.currency_symbol, analyzer.currency)
-            st.dataframe(formatted_balance, use_container_width=True)
-            with st.expander("📥 Download / View Raw Data"):
-                csv = balance_df.to_csv()
-                st.download_button("📥 Download CSV", csv, f"{analyzer.original_ticker}_balance.csv", "text/csv")
-        else:
-            st.warning("Balance Sheet not available.")
-    
-    with tab3:
-        cashflow_df = analyzer.financials.get('cashflow')
-        if cashflow_df is not None and not cashflow_df.empty:
-            formatted_cashflow = format_financial_df(cashflow_df, analyzer.currency_symbol, analyzer.currency)
-            st.dataframe(formatted_cashflow, use_container_width=True)
-            with st.expander("📥 Download / View Raw Data"):
-                csv = cashflow_df.to_csv()
-                st.download_button("📥 Download CSV", csv, f"{analyzer.original_ticker}_cashflow.csv", "text/csv")
-        else:
-            st.warning("Cash Flow not available.")
+    for tab, key, name in [(tab1, 'income', 'Income'), (tab2, 'balance', 'Balance'), (tab3, 'cashflow', 'Cash')]:
+        with tab:
+            df = analyzer.financials.get(key)
+            if df is not None and not df.empty:
+                formatted = format_financial_df(df, analyzer.currency_symbol, analyzer.currency)
+                if formatted is not None:
+                    st.dataframe(formatted, use_container_width=True)
+                with st.expander("📥 Download / Raw Data"):
+                    st.dataframe(df, use_container_width=True)
+                    csv = df.to_csv()
+                    st.download_button(f"📥 Download {name} CSV", csv, f"{analyzer.original_ticker}_{key}.csv", "text/csv")
+            else:
+                st.warning(f"{name} Statement not available for {analyzer.original_ticker}. This may be due to Yahoo Finance data limitations.")
     
     st.divider()
-    st.caption(f"Data: Yahoo Finance | Currency: {analyzer.currency} | Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"Data: Yahoo Finance | Currency: {analyzer.currency} | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
 if __name__ == "__main__":
     main()
