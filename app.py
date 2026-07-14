@@ -1479,7 +1479,7 @@ def main():
 
     tab1, tab2, tab3, tab4 = st.tabs(["🔍 Stock Analysis", "🛡️ Stress Tests", "📈 Technical Analysis", "🎯 Portfolio Optimizer"])
 
-    # ===== TAB 1 =====
+        # ===== TAB 1 =====
     with tab1:
         c1, c2, c3 = st.columns([3, 1.5, 1])
         with c1: ticker = st.text_input("Stock Ticker", value=st.session_state.get('current_ticker', 'AAPL'), max_chars=50, key="input_ticker")
@@ -1492,8 +1492,10 @@ def main():
         for i, (stock, exch) in enumerate(quick_data):
             with qcols[i]:
                 if st.button(stock, use_container_width=True, key=f"qa_{stock}_{i}"):
-                    st.session_state['current_ticker'] = stock; st.session_state['current_exchange'] = exch
-                    st.session_state['analyze_clicked'] = True; st.rerun()
+                    st.session_state['current_ticker'] = stock
+                    st.session_state['current_exchange'] = exch
+                    st.session_state['analyze_clicked'] = True
+                    st.rerun()
 
         with st.expander("📋 More Stocks"):
             c1, c2 = st.columns(2)
@@ -1502,21 +1504,24 @@ def main():
                 for i, t in enumerate(list(INDIAN_STOCKS_DB.keys())[:24]):
                     with icols[i%4]:
                         if st.button(t, use_container_width=True, key=f"ind_{t}"):
-                            st.session_state['current_ticker'] = t; st.session_state['current_exchange'] = "NSE India (.NS)"
-                            st.session_state['analyze_clicked'] = True; st.rerun()
+                            st.session_state['current_ticker'] = t
+                            st.session_state['current_exchange'] = "NSE India (.NS)"
+                            st.session_state['analyze_clicked'] = True
+                            st.rerun()
             with c2:
                 st.markdown("**US Stocks**"); ucols = st.columns(4)
                 for i, s in enumerate(["AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","JPM","V","WMT","NFLX","ADBE","ORCL","CRM","AMD","INTC"]):
                     with ucols[i%4]:
                         if st.button(s, use_container_width=True, key=f"us_{s}"):
-                            st.session_state['current_ticker'] = s; st.session_state['current_exchange'] = "US Market"
-                            st.session_state['analyze_clicked'] = True; st.rerun()
+                            st.session_state['current_ticker'] = s
+                            st.session_state['current_exchange'] = "US Market"
+                            st.session_state['analyze_clicked'] = True
+                            st.rerun()
 
-        if ticker and ticker != st.session_state.get('current_ticker', ''):
-    st.session_state['current_ticker'] = ticker
-if exchange and exchange != st.session_state.get('current_exchange', ''):
-    st.session_state['current_exchange'] = exchange
-        if analyze_btn: st.session_state['analyze_clicked'] = True
+        st.session_state['current_ticker'] = ticker
+        st.session_state['current_exchange'] = exchange
+        if analyze_btn:
+            st.session_state['analyze_clicked'] = True
 
         if not st.session_state['analyze_clicked']:
             st.markdown('<div style="text-align:center;padding:4rem;"><h2>🏦 Enterprise Financial Analysis Platform</h2></div>', unsafe_allow_html=True)
@@ -1574,44 +1579,28 @@ if exchange and exchange != st.session_state.get('current_exchange', ''):
     # ===== TAB 2 =====
     with tab2:
         st.markdown("### 🛡️ Comprehensive Stress Tests (30 Scenarios)")
-        st.markdown("Enter a ticker to stress test its price under various scenarios.")
-        
         col1, col2 = st.columns([2, 1])
         with col1:
             st2_t = st.text_input("Ticker", value="AAPL", key="stress_ticker_input")
         with col2:
             st2_e = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="stress_exchange_input")
         
-        run_stress = st.button("🛡️ Run 30 Stress Tests", type="primary", use_container_width=True, key="run_stress_btn")
-        
-        if run_stress:
+        if st.button("🛡️ Run 30 Stress Tests", type="primary", use_container_width=True, key="run_stress_btn"):
             if not st2_t:
                 st.warning("Please enter a ticker.")
             else:
                 em2 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
                 a2 = ProFinancialAnalyzer(st2_t.strip().upper(), exchange=em2.get(st2_e,"Auto"))
-                
-                with st.spinner("Loading market data..."):
-                    price_ok = a2.get_live_price()
-                
-                if not price_ok:
-                    st.error(f"Could not fetch data for {st2_t}. Try a different ticker.")
-                else:
-                    with st.spinner("Fetching company info..."):
-                        a2.fetch_financial_data()
-                    
-                    # Show current price before stress test
-                    cp = a2.live_price_data.get('current_price')
-                    if cp:
-                        st.info(f"📊 Current Price of **{a2.company_name}**: {a2.currency_symbol}{cp:.2f}")
-                    
-                    # Run and display stress tests
-                    create_stress_test_dashboard(a2)
+                with st.spinner("Loading..."):
+                    a2.get_live_price()
+                    a2.fetch_financial_data()
+                create_stress_test_dashboard(a2)
 
     # ===== TAB 3 =====
     with tab3:
         st.markdown("### 📈 Technical Analysis")
-        ta_t = st.text_input("Ticker", "AAPL", key="ta_t"); ta_e = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="ta_e")
+        ta_t = st.text_input("Ticker", "AAPL", key="ta_t")
+        ta_e = st.selectbox("Exchange", ["Auto-detect","NSE India (.NS)","BSE India (.BO)","US Market"], key="ta_e")
         if st.button("📈 Run TA", type="primary", key="ta_btn"):
             em3 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
             a3 = ProFinancialAnalyzer(ta_t, exchange=em3.get(ta_e,"Auto"))
