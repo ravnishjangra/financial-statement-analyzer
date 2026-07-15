@@ -114,23 +114,35 @@ class ProFinancialAnalyzer:
         return ticker
 
     def get_live_price(self):
+        """Robust live price fetch – works even if marketCap is missing"""
         try:
             self.stock = yf.Ticker(self.ticker)
             info = self.stock.info
-            if not info or not info.get('marketCap'):
+
+            # If info is almost empty, try alternate exchanges
+            if not info or len(info) < 5:
                 alts = []
-                if self.ticker.endswith('.NS'): alts = [self.ticker.replace('.NS','.BO'), self.ticker.replace('.NS','')]
-                elif self.ticker.endswith('.BO'): alts = [self.ticker.replace('.BO','.NS'), self.ticker.replace('.BO','')]
-                else: alts = [self.ticker+'.NS', self.ticker+'.BO']
+                if self.ticker.endswith('.NS'):
+                    alts = [self.ticker.replace('.NS', '.BO'), self.ticker.replace('.NS', '')]
+                elif self.ticker.endswith('.BO'):
+                    alts = [self.ticker.replace('.BO', '.NS'), self.ticker.replace('.BO', '')]
+                else:
+                    alts = [self.ticker + '.NS', self.ticker + '.BO']
                 for alt in alts:
                     try:
                         s = yf.Ticker(alt); i = s.info
-                        if i and i.get('marketCap'): self.stock = s; self.ticker = alt; info = i; break
+                        if i and len(i) >= 5:
+                            self.stock = s; self.ticker = alt; info = i; break
                     except: continue
-            if info:
-                self._populate_from_info(info); self.data_source = 'Yahoo Finance'; return True
+
+            # Always populate whatever we have (don't require marketCap)
+            if info and len(info) >= 3:   # minimal viable info
+                self._populate_from_info(info)
+                self.data_source = 'Yahoo Finance'
+                return True
             return False
-        except: return False
+        except Exception as e:
+            return False
 
     def _populate_from_info(self, info):
         self.live_price_data = {
@@ -1386,7 +1398,6 @@ def main():
             st.write("")
             analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
-        # Use whatever is in the text input
         if ticker:
             st.session_state['current_ticker'] = ticker.upper().strip()
         if exchange:
@@ -1440,69 +1451,68 @@ def main():
             current_exchange = st.session_state.get('current_exchange', 'Auto-detect')
             
             analyzer = ProFinancialAnalyzer(current_ticker, exchange=em.get(current_exchange,"Auto"))
-            with st.spinner("🔍 Analyzing..."): 
-                analyzer.get_live_price()
+            
+            if not analyzer.get_live_price():
+                st.error("❌ Could not fetch live data. Please check the ticker or try again later.")
+            else:
                 analyzer.fetch_financial_data()
                 analyzer.calculate_all_ratios()
 
-            pd_d = analyzer.live_price_data
-            cur = analyzer.currency_symbol
-            cp = pd_d.get('current_price')
-            pc = pd_d.get('previous_close')
-            
-            if cp and pc:
-                ch = cp - pc
-                ch_pct = (ch/pc)*100
-                color = "price-up" if ch>=0 else "price-down"
-                arrow = "▲" if ch>=0 else "▼"
-                st.markdown(f'<div class="live-price-box"><h2>{analyzer.company_name}</h2><div class="{color}">{cur}{cp:.2f} {arrow}</div><div>{cur}{abs(ch):.2f} ({ch_pct:+.2f}%)</div></div>', unsafe_allow_html=True)
-
-            rec = analyzer.live_price_data.get('recommendation','').upper()
-            if rec:
-                rc = {'BUY':'#10b981','STRONG_BUY':'#10b981','HOLD':'#f59e0b','SELL':'#ef4444','STRONG_SELL':'#ef4444'}.get(rec,'#666')
-                st.markdown(f'<div style="background-color:{rc};padding:0.75rem;border-radius:12px;color:white;text-align:center;font-weight:700;">🎯 {rec.replace("_"," ")}</div>', unsafe_allow_html=True)
-
-            st.markdown(f'<div class="info-box">📊 {analyzer.company_name} | {analyzer.financials.get("sector","N/A")} | {analyzer.currency} | MCap: {analyzer._format_amount(pd_d.get("market_cap",0))}</div>', unsafe_allow_html=True)
-
-            # Ratios
-            st.markdown('<div class="section-header">📊 Key Ratios</div>', unsafe_allow_html=True)
-            ratios = analyzer.ratios
-            if ratios:
-                cols = st.columns(5)
-                for col, (l, v) in zip(cols, [('P/E',ratios.get('P/E Ratio')),('ROE %',ratios.get('ROE')),('P/B',ratios.get('P/B Ratio')),('D/E',ratios.get('Debt to Equity')),('Div Yld',ratios.get('Dividend Yield'))]):
-                    with col:
-                        if isinstance(v,(int,float)):
-                            d = f"{v:.1f}%" if l in ['ROE %','Div Yld'] else f"{v:.2f}"
-                            st.markdown(f'<div class="card"><div class="metric-value">{d}</div><div class="metric-label">{l}</div></div>', unsafe_allow_html=True)
-
-            create_valuation_dashboard(analyzer)
-            create_advanced_scores_dashboard(analyzer)
-            create_index_comparison_dashboard(analyzer)
-            create_investment_thesis_dashboard(analyzer)
-            create_historical_dcf_tracker(analyzer)
-            create_factor_investing_dashboard(analyzer)
+                pd_d = analyzer.live_price_data
+                cur = analyzer.currency_symbol
+                cp = pd_d.get('current_price')
+                pc = pd_d.get('previous_close')
                 
-            # Peer Comparison
-            group_name, peer_list = detect_peer_group(analyzer.ticker)
-            if peer_list:
-                peer_list = [p for p in peer_list if p!=analyzer.ticker][:5]
-                if len(peer_list) >= 1:
-                    with st.spinner("Fetching peers..."):
-                        pdf = get_peer_comparison(analyzer.ticker, [analyzer.ticker] + peer_list)
-                        if not pdf.empty:
-                            st.markdown('<div class="section-header">🏢 Peer Comparison</div>', unsafe_allow_html=True)
-                            st.dataframe(pdf, use_container_width=True, hide_index=True)
+                if cp and pc:
+                    ch = cp - pc
+                    ch_pct = (ch/pc)*100
+                    color = "price-up" if ch>=0 else "price-down"
+                    arrow = "▲" if ch>=0 else "▼"
+                    st.markdown(f'<div class="live-price-box"><h2>{analyzer.company_name}</h2><div class="{color}">{cur}{cp:.2f} {arrow}</div><div>{cur}{abs(ch):.2f} ({ch_pct:+.2f}%)</div></div>', unsafe_allow_html=True)
 
-            # Financial Statements
-            st.markdown('<div class="section-header">📋 Financial Statements</div>', unsafe_allow_html=True)
-            t1, t2, t3 = st.tabs(["Income","Balance","Cash Flow"])
-            for tab, key, name in [(t1,'income','Income'),(t2,'balance','Balance'),(t3,'cashflow','Cash')]:
-                with tab:
-                    df = analyzer.financials.get(key)
-                    if df is not None and not df.empty:
-                        formatted = format_financial_df(df, analyzer.currency_symbol, analyzer.currency)
-                        if formatted is not None: st.dataframe(formatted, use_container_width=True)
-                    else: st.info(f"{name} not available.")
+                rec = analyzer.live_price_data.get('recommendation','').upper()
+                if rec:
+                    rc = {'BUY':'#10b981','STRONG_BUY':'#10b981','HOLD':'#f59e0b','SELL':'#ef4444','STRONG_SELL':'#ef4444'}.get(rec,'#666')
+                    st.markdown(f'<div style="background-color:{rc};padding:0.75rem;border-radius:12px;color:white;text-align:center;font-weight:700;">🎯 {rec.replace("_"," ")}</div>', unsafe_allow_html=True)
+
+                st.markdown(f'<div class="info-box">📊 {analyzer.company_name} | {analyzer.financials.get("sector","N/A")} | {analyzer.currency} | MCap: {analyzer._format_amount(pd_d.get("market_cap",0))}</div>', unsafe_allow_html=True)
+
+                st.markdown('<div class="section-header">📊 Key Ratios</div>', unsafe_allow_html=True)
+                ratios = analyzer.ratios
+                if ratios:
+                    cols = st.columns(5)
+                    for col, (l, v) in zip(cols, [('P/E',ratios.get('P/E Ratio')),('ROE %',ratios.get('ROE')),('P/B',ratios.get('P/B Ratio')),('D/E',ratios.get('Debt to Equity')),('Div Yld',ratios.get('Dividend Yield'))]):
+                        with col:
+                            if isinstance(v,(int,float)):
+                                d = f"{v:.1f}%" if l in ['ROE %','Div Yld'] else f"{v:.2f}"
+                                st.markdown(f'<div class="card"><div class="metric-value">{d}</div><div class="metric-label">{l}</div></div>', unsafe_allow_html=True)
+
+                create_valuation_dashboard(analyzer)
+                create_advanced_scores_dashboard(analyzer)
+                create_index_comparison_dashboard(analyzer)
+                create_investment_thesis_dashboard(analyzer)
+                create_historical_dcf_tracker(analyzer)
+                create_factor_investing_dashboard(analyzer)
+                    
+                group_name, peer_list = detect_peer_group(analyzer.ticker)
+                if peer_list:
+                    peer_list = [p for p in peer_list if p!=analyzer.ticker][:5]
+                    if len(peer_list) >= 1:
+                        with st.spinner("Fetching peers..."):
+                            pdf = get_peer_comparison(analyzer.ticker, [analyzer.ticker] + peer_list)
+                            if not pdf.empty:
+                                st.markdown('<div class="section-header">🏢 Peer Comparison</div>', unsafe_allow_html=True)
+                                st.dataframe(pdf, use_container_width=True, hide_index=True)
+
+                st.markdown('<div class="section-header">📋 Financial Statements</div>', unsafe_allow_html=True)
+                t1, t2, t3 = st.tabs(["Income","Balance","Cash Flow"])
+                for tab, key, name in [(t1,'income','Income'),(t2,'balance','Balance'),(t3,'cashflow','Cash')]:
+                    with tab:
+                        df = analyzer.financials.get(key)
+                        if df is not None and not df.empty:
+                            formatted = format_financial_df(df, analyzer.currency_symbol, analyzer.currency)
+                            if formatted is not None: st.dataframe(formatted, use_container_width=True)
+                        else: st.info(f"{name} not available.")
 
     # ===== TAB 2 =====
     with tab2:
@@ -1520,9 +1530,11 @@ def main():
                 em2 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
                 a2 = ProFinancialAnalyzer(st2_t.strip().upper(), exchange=em2.get(st2_e,"Auto"))
                 with st.spinner("Loading..."):
-                    a2.get_live_price()
-                    a2.fetch_financial_data()
-                create_stress_test_dashboard(a2)
+                    if a2.get_live_price():
+                        a2.fetch_financial_data()
+                        create_stress_test_dashboard(a2)
+                    else:
+                        st.error("Could not fetch data for stress test.")
 
     # ===== TAB 3 =====
     with tab3:
@@ -1532,8 +1544,11 @@ def main():
         if st.button("📈 Run TA", type="primary", key="ta_btn"):
             em3 = {"NSE India (.NS)":"NSE","BSE India (.BO)":"BSE","US Market":"US","Auto-detect":"Auto"}
             a3 = ProFinancialAnalyzer(ta_t, exchange=em3.get(ta_e,"Auto"))
-            with st.spinner("Calculating..."): a3.get_live_price(); a3.fetch_financial_data()
-            create_technical_dashboard(a3)
+            if a3.get_live_price():
+                a3.fetch_financial_data()
+                create_technical_dashboard(a3)
+            else:
+                st.error("Could not fetch data for technical analysis.")
 
     # ===== TAB 4 =====
     with tab4:
