@@ -244,12 +244,49 @@ class ProFinancialAnalyzer:
         return ticker
 
     def get_live_price(self):
-        """Try yfinance first, then multi‑source fallback"""
-        if self._try_yfinance_direct():
-            return True
-
-        # Multi‑source fallback
+        """Try all sources quickly - fallback first if yfinance seems down"""
+        # Quick yfinance attempt
+        try:
+            self.stock = yf.Ticker(self.ticker)
+            info = self.stock.info
+            price = info.get('currentPrice') or info.get('regularMarketPrice')
+            if price and price > 0:
+                self._populate_from_info(info)
+                self.data_source = 'Yahoo Finance'
+                return True
+        except:
+            pass
+        
+        # Try yahooquery next (often works when yfinance is blocked)
         result = MultiSourceFetcher.fetch_price(self.ticker)
+        if result and result.get('current_price'):
+            self.live_price_data = {
+                'current_price': result['current_price'],
+                'previous_close': None, 'open': None, 'day_high': None,
+                'day_low': None, 'volume': None, 'market_cap': None,
+                'fifty_two_week_high': None, 'fifty_two_week_low': None,
+                'beta': None, 'recommendation': None, 'number_of_analysts': None,
+            }
+            self.data_source = result.get('source', 'fallback')
+            try:
+                self.stock = yf.Ticker(self.ticker)
+            except:
+                pass
+            return True
+        
+        # Last resort - try yfinance history
+        try:
+            hist = self.stock.history(period='5d') if self.stock else None
+            if hist is not None and not hist.empty:
+                last = hist['Close'].iloc[-1]
+                if pd.notna(last) and last > 0:
+                    self.live_price_data = {'current_price': last}
+                    self.data_source = 'Yahoo Finance (history)'
+                    return True
+        except:
+            pass
+        
+        return False
         if result and result.get('current_price'):
             self.live_price_data = {
                 'current_price': result['current_price'],
