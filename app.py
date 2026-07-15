@@ -13,6 +13,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import time
+import requests
+from yahooquery import Ticker as YQTicker
 
 # Page config
 st.set_page_config(page_title="FinAnalyzer Pro | Enterprise Analysis", page_icon="📊", layout="wide")
@@ -92,6 +94,134 @@ PEER_GROUPS = {
 }
 
 
+# ===== MULTI‑SOURCE PRICE FETCHER =====
+class MultiSourceFetcher:
+    """Try multiple free data sources until one returns a valid price"""
+    
+    @staticmethod
+    def fetch_price(ticker):
+        # 1. yfinance (handled separately in Analyzer)
+        # 2. yahooquery
+        price = MultiSourceFetcher._try_yahooquery(ticker)
+        if price: return price
+        
+        # 3. Twelve Data
+        price = MultiSourceFetcher._try_twelvedata(ticker)
+        if price: return price
+        
+        # 4. Alpha Vantage
+        price = MultiSourceFetcher._try_alphavantage(ticker)
+        if price: return price
+        
+        # 5. Financial Modeling Prep (needs FMP_API_KEY)
+        price = MultiSourceFetcher._try_fmp(ticker)
+        if price: return price
+        
+        # 6. Google Finance (fragile, last resort)
+        price = MultiSourceFetcher._try_google_finance(ticker)
+        if price: return price
+        
+        # 7. EODHD (needs EODHD_API_KEY)
+        price = MultiSourceFetcher._try_eodhd(ticker)
+        if price: return price
+        
+        return None
+
+    @staticmethod
+    def _try_yahooquery(ticker):
+        try:
+            t = YQTicker(ticker)
+            data = t.price[ticker]
+            if data and 'regularMarketPrice' in data:
+                return {'current_price': data['regularMarketPrice'], 'source': 'yahooquery'}
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _try_twelvedata(ticker):
+        api_key = st.secrets.get("TWELVEDATA_API_KEY", "")
+        if not api_key: return None
+        try:
+            url = f"https://api.twelvedata.com/price?symbol={ticker}&apikey={api_key}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if 'price' in data:
+                    return {'current_price': float(data['price']), 'source': 'Twelve Data'}
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _try_alphavantage(ticker):
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY", "")
+        if not api_key: return None
+        try:
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={api_key}"
+            resp = requests.get(url, timeout=5)
+            data = resp.json()
+            if 'Global Quote' in data and '05. price' in data['Global Quote']:
+                price = float(data['Global Quote']['05. price'])
+                if price > 0:
+                    return {'current_price': price, 'source': 'Alpha Vantage'}
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _try_fmp(ticker):
+        api_key = st.secrets.get("FMP_API_KEY", "")
+        if not api_key: return None
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and 'price' in data[0]:
+                    return {'current_price': data[0]['price'], 'source': 'Financial Modeling Prep'}
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _try_google_finance(ticker):
+        try:
+            if ticker.endswith('.NS'):
+                gf_ticker = f'NSE:{ticker[:-3]}'
+            elif ticker.endswith('.BO'):
+                gf_ticker = f'BOM:{ticker[:-3]}'
+            else:
+                gf_ticker = ticker
+            url = f'https://www.google.com/finance/quote/{gf_ticker}'
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                import re
+                match = re.search(r'data-last-price="([^"]*)"', resp.text)
+                if match:
+                    price = float(match.group(1).replace(',', ''))
+                    return {'current_price': price, 'source': 'Google Finance'}
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _try_eodhd(ticker):
+        api_key = st.secrets.get("EODHD_API_KEY", "")
+        if not api_key: return None
+        try:
+            url = f"https://eodhd.com/api/real-time/{ticker}?api_token={api_key}&fmt=json"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if 'close' in data:
+                    return {'current_price': data['close'], 'source': 'EODHD'}
+        except:
+            pass
+        return None
+
+
 # ===== ANALYZER CLASS =====
 class ProFinancialAnalyzer:
     def __init__(self, ticker, exchange="Auto"):
@@ -114,35 +244,101 @@ class ProFinancialAnalyzer:
         return ticker
 
     def get_live_price(self):
-        """Robust live price fetch – works even if marketCap is missing"""
+        """Try yfinance first, then multi‑source fallback"""
+        if self._try_yfinance_direct():
+            return True
+
+        # Multi‑source fallback
+        result = MultiSourceFetcher.fetch_price(self.ticker)
+        if result and result.get('current_price'):
+            self.live_price_data = {
+                'current_price': result['current_price'],
+                'previous_close': None,
+                'open': None,
+                'day_high': None,
+                'day_low': None,
+                'volume': None,
+                'market_cap': None,
+                'fifty_two_week_high': None,
+                'fifty_two_week_low': None,
+                'beta': None,
+                'recommendation': None,
+                'number_of_analysts': None,
+            }
+            self.data_source = result.get('source', 'fallback')
+            try:
+                self.stock = yf.Ticker(self.ticker)
+            except:
+                pass
+            return True
+        return False
+
+    def _try_yfinance_direct(self):
+        """Robust yfinance fetch with history and alternate exchanges"""
         try:
             self.stock = yf.Ticker(self.ticker)
             info = self.stock.info
-
-            # If info is almost empty, try alternate exchanges
-            if not info or len(info) < 5:
-                alts = []
-                if self.ticker.endswith('.NS'):
-                    alts = [self.ticker.replace('.NS', '.BO'), self.ticker.replace('.NS', '')]
-                elif self.ticker.endswith('.BO'):
-                    alts = [self.ticker.replace('.BO', '.NS'), self.ticker.replace('.BO', '')]
-                else:
-                    alts = [self.ticker + '.NS', self.ticker + '.BO']
-                for alt in alts:
-                    try:
-                        s = yf.Ticker(alt); i = s.info
-                        if i and len(i) >= 5:
-                            self.stock = s; self.ticker = alt; info = i; break
-                    except: continue
-
-            # Always populate whatever we have (don't require marketCap)
-            if info and len(info) >= 3:   # minimal viable info
+            price = info.get('currentPrice') or info.get('regularMarketPrice')
+            if price:
                 self._populate_from_info(info)
                 self.data_source = 'Yahoo Finance'
                 return True
-            return False
-        except Exception as e:
-            return False
+
+            # history fallback
+            hist = self.stock.history(period='5d')
+            if not hist.empty and 'Close' in hist.columns:
+                last_close = hist['Close'].iloc[-1]
+                if pd.notna(last_close) and last_close > 0:
+                    self.live_price_data = {
+                        'current_price': last_close,
+                        'previous_close': info.get('previousClose'),
+                        'open': info.get('open'),
+                        'day_high': info.get('dayHigh'),
+                        'day_low': info.get('dayLow'),
+                        'volume': info.get('volume'),
+                        'market_cap': info.get('marketCap'),
+                        'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
+                        'fifty_two_week_low': info.get('fiftyTwoWeekLow'),
+                        'beta': info.get('beta'),
+                        'recommendation': info.get('recommendationKey'),
+                    }
+                    self.live_price_data = {k: v for k, v in self.live_price_data.items() if v is not None}
+                    self.data_source = 'Yahoo Finance (history)'
+                    return True
+
+            # alternate exchanges
+            alts = []
+            if self.ticker.endswith('.NS'):
+                alts = [self.ticker.replace('.NS','.BO'), self.ticker.replace('.NS','')]
+            elif self.ticker.endswith('.BO'):
+                alts = [self.ticker.replace('.BO','.NS'), self.ticker.replace('.BO','')]
+            else:
+                alts = [self.ticker+'.NS', self.ticker+'.BO']
+            for alt in alts:
+                try:
+                    s = yf.Ticker(alt)
+                    i = s.info
+                    p = i.get('currentPrice') or i.get('regularMarketPrice')
+                    if p:
+                        self.stock = s
+                        self.ticker = alt
+                        self._populate_from_info(i)
+                        self.data_source = 'Yahoo Finance (alt)'
+                        return True
+                    hist = s.history(period='5d')
+                    if not hist.empty:
+                        last = hist['Close'].iloc[-1]
+                        if pd.notna(last) and last > 0:
+                            self.stock = s
+                            self.ticker = alt
+                            self.live_price_data = {'current_price': last}
+                            self.data_source = 'Yahoo Finance (alt history)'
+                            return True
+                except:
+                    continue
+        except:
+            pass
+        return False
 
     def _populate_from_info(self, info):
         self.live_price_data = {
@@ -1033,61 +1229,37 @@ class FactorInvesting:
         ratios = analyzer.ratios
         prices = analyzer.financials.get('prices')
         
-        # Value Factor (P/B ratio)
         pb = ratios.get('P/B Ratio')
         if pb and pb > 0:
-            if pb < 1.5:
-                exposures['Value'] = {'score': 'Deep Value', 'detail': f'P/B: {pb:.1f}', 'color': '#10b981'}
-            elif pb < 3:
-                exposures['Value'] = {'score': 'Fair Value', 'detail': f'P/B: {pb:.1f}', 'color': '#f59e0b'}
-            else:
-                exposures['Value'] = {'score': 'Growth', 'detail': f'P/B: {pb:.1f}', 'color': '#ef4444'}
+            if pb < 1.5: exposures['Value'] = {'score': 'Deep Value', 'detail': f'P/B: {pb:.1f}', 'color': '#10b981'}
+            elif pb < 3: exposures['Value'] = {'score': 'Fair Value', 'detail': f'P/B: {pb:.1f}', 'color': '#f59e0b'}
+            else: exposures['Value'] = {'score': 'Growth', 'detail': f'P/B: {pb:.1f}', 'color': '#ef4444'}
         
-        # Size Factor
         mcap = analyzer.live_price_data.get('market_cap', 0) or info.get('marketCap', 0)
         if mcap and mcap > 0:
-            if mcap > 1e11:
-                exposures['Size'] = {'score': 'Mega Cap', 'detail': analyzer._format_amount(mcap), 'color': '#94a3b8'}
-            elif mcap > 1e10:
-                exposures['Size'] = {'score': 'Large Cap', 'detail': analyzer._format_amount(mcap), 'color': '#667eea'}
-            elif mcap > 2e9:
-                exposures['Size'] = {'score': 'Mid Cap', 'detail': analyzer._format_amount(mcap), 'color': '#f59e0b'}
-            else:
-                exposures['Size'] = {'score': 'Small Cap', 'detail': analyzer._format_amount(mcap), 'color': '#10b981'}
+            if mcap > 1e11: exposures['Size'] = {'score': 'Mega Cap', 'detail': analyzer._format_amount(mcap), 'color': '#94a3b8'}
+            elif mcap > 1e10: exposures['Size'] = {'score': 'Large Cap', 'detail': analyzer._format_amount(mcap), 'color': '#667eea'}
+            elif mcap > 2e9: exposures['Size'] = {'score': 'Mid Cap', 'detail': analyzer._format_amount(mcap), 'color': '#f59e0b'}
+            else: exposures['Size'] = {'score': 'Small Cap', 'detail': analyzer._format_amount(mcap), 'color': '#10b981'}
         
-        # Momentum Factor
         if prices is not None and not prices.empty and 'Close' in prices.columns and len(prices) >= 252:
             ret_12m = (prices['Close'].iloc[-1] / prices['Close'].iloc[-252] - 1) * 100
-            if ret_12m > 30:
-                exposures['Momentum'] = {'score': 'Strong', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#10b981'}
-            elif ret_12m > 10:
-                exposures['Momentum'] = {'score': 'Positive', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#667eea'}
-            elif ret_12m > -10:
-                exposures['Momentum'] = {'score': 'Neutral', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#f59e0b'}
-            else:
-                exposures['Momentum'] = {'score': 'Negative', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#ef4444'}
+            if ret_12m > 30: exposures['Momentum'] = {'score': 'Strong', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#10b981'}
+            elif ret_12m > 10: exposures['Momentum'] = {'score': 'Positive', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#667eea'}
+            elif ret_12m > -10: exposures['Momentum'] = {'score': 'Neutral', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#f59e0b'}
+            else: exposures['Momentum'] = {'score': 'Negative', 'detail': f'12M: {ret_12m:.0f}%', 'color': '#ef4444'}
         
-        # Quality Factor
-        roe = ratios.get('ROE')
-        de = ratios.get('Debt to Equity')
+        roe = ratios.get('ROE'); de = ratios.get('Debt to Equity')
         if roe is not None and de is not None:
-            if roe > 20 and de < 0.5:
-                exposures['Quality'] = {'score': 'High Quality', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#10b981'}
-            elif roe > 10 and de < 1.5:
-                exposures['Quality'] = {'score': 'Moderate', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#f59e0b'}
-            else:
-                exposures['Quality'] = {'score': 'Low', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#ef4444'}
+            if roe > 20 and de < 0.5: exposures['Quality'] = {'score': 'High Quality', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#10b981'}
+            elif roe > 10 and de < 1.5: exposures['Quality'] = {'score': 'Moderate', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#f59e0b'}
+            else: exposures['Quality'] = {'score': 'Low', 'detail': f'ROE: {roe:.0f}%, D/E: {de:.1f}', 'color': '#ef4444'}
         
-        # Low Volatility Factor
         beta = analyzer.live_price_data.get('beta', 1.0) or info.get('beta', 1.0) or 1.0
-        if beta < 0.7:
-            exposures['Low Vol'] = {'score': 'Very Low', 'detail': f'Beta: {beta:.2f}', 'color': '#10b981'}
-        elif beta < 1.0:
-            exposures['Low Vol'] = {'score': 'Low', 'detail': f'Beta: {beta:.2f}', 'color': '#667eea'}
-        elif beta < 1.3:
-            exposures['Low Vol'] = {'score': 'Moderate', 'detail': f'Beta: {beta:.2f}', 'color': '#f59e0b'}
-        else:
-            exposures['Low Vol'] = {'score': 'High', 'detail': f'Beta: {beta:.2f}', 'color': '#ef4444'}
+        if beta < 0.7: exposures['Low Vol'] = {'score': 'Very Low', 'detail': f'Beta: {beta:.2f}', 'color': '#10b981'}
+        elif beta < 1.0: exposures['Low Vol'] = {'score': 'Low', 'detail': f'Beta: {beta:.2f}', 'color': '#667eea'}
+        elif beta < 1.3: exposures['Low Vol'] = {'score': 'Moderate', 'detail': f'Beta: {beta:.2f}', 'color': '#f59e0b'}
+        else: exposures['Low Vol'] = {'score': 'High', 'detail': f'Beta: {beta:.2f}', 'color': '#ef4444'}
         
         return exposures
 
@@ -1229,8 +1401,8 @@ def create_advanced_scores_dashboard(analyzer):
         if z_result:
             z = z_result['z_score']; z_color = "#10b981" if z>2.99 else "#f59e0b" if z>1.81 else "#ef4444"
             fig = go.Figure(go.Indicator(mode="gauge+number", value=z, title={'text':"Z-Score"}, gauge={'axis':{'range':[0,6]},'bar':{'color':z_color},'steps':[{'range':[0,1.81],'color':"rgba(239,68,68,0.2)"},{'range':[1.81,2.99],'color':"rgba(245,158,11,0.2)"},{'range':[2.99,6],'color':"rgba(16,185,129,0.2)"}]}))
-            fig.update_layout(height=250, margin=dict(t=30,b=0)); st.plotly_chart(fig, use_container_width=True)
-            st.markdown(f"**{z_result['zone']}** - {z_result['risk']}")
+        fig.update_layout(height=250, margin=dict(t=30,b=0)); st.plotly_chart(fig, use_container_width=True)
+        st.markdown(f"**{z_result['zone']}** - {z_result['risk']}")
         else: st.warning("Insufficient data for Z-Score")
 
 def create_valuation_dashboard(analyzer):
