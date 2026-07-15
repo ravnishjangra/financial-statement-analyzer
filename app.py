@@ -1401,9 +1401,10 @@ def create_advanced_scores_dashboard(analyzer):
         if z_result:
             z = z_result['z_score']; z_color = "#10b981" if z>2.99 else "#f59e0b" if z>1.81 else "#ef4444"
             fig = go.Figure(go.Indicator(mode="gauge+number", value=z, title={'text':"Z-Score"}, gauge={'axis':{'range':[0,6]},'bar':{'color':z_color},'steps':[{'range':[0,1.81],'color':"rgba(239,68,68,0.2)"},{'range':[1.81,2.99],'color':"rgba(245,158,11,0.2)"},{'range':[2.99,6],'color':"rgba(16,185,129,0.2)"}]}))
-        fig.update_layout(height=250, margin=dict(t=30,b=0)); st.plotly_chart(fig, use_container_width=True)
-        st.markdown(f"**{z_result['zone']}** - {z_result['risk']}")
-        else: st.warning("Insufficient data for Z-Score")
+            fig.update_layout(height=250, margin=dict(t=30,b=0)); st.plotly_chart(fig, use_container_width=True)
+            st.markdown(f"**{z_result['zone']}** - {z_result['risk']}")
+        else:
+            st.warning("Insufficient data for Z-Score")
 
 def create_valuation_dashboard(analyzer):
     st.markdown('<div class="section-header">💰 Advanced Valuation Models</div>', unsafe_allow_html=True)
